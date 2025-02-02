@@ -56,7 +56,7 @@ torchrun --nnodes 1 --nproc_per_node 8\
     --model_type "hunyuan" \
     --cache_dir "$DATA_DIR/.cache"\
     --data_json_path "$DATA_DIR/HD-Mixkit-Finetune-Hunyuan/videos2caption.json"\
-    --validation_prompt_dir "$DATA_DIR/HD-Mixkit-Finetune-Hunyuan/validation"\
+    --validation_prompt_dir "$DATA_DIR/Image-Vid-Finetune-HunYuan-ChatGPT-Prompts/validation"\
     --gradient_checkpointing\
     --train_batch_size=1\
     --num_latent_t 8 \
@@ -69,7 +69,7 @@ torchrun --nnodes 1 --nproc_per_node 8\
     --mixed_precision="bf16"\
     --checkpointing_steps=64\
     --validation_steps 64\
-    --validation_sampling_steps "2,4,8" \
+    --validation_sampling_steps "4,8" \
     --checkpoints_total_limit 3\
     --allow_tf32\
     --ema_start_step 0\

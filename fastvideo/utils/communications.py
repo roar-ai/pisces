@@ -41,7 +41,12 @@ from typing import Any, List
 #     return list(broadcast(caption))
 
 
-def broadcast(input_: List[Any]):
+def broadcast(input_: torch.Tensor):
+    src = nccl_info.group_id * nccl_info.sp_size
+    dist.broadcast(input_, src=src, group=nccl_info.group)
+
+
+def broadcast_custom(input_: List[Any]):
     """
     Broadcasts a list of objects across all ranks.
     Each rank initially has a different element, and after broadcasting,
@@ -66,7 +71,7 @@ def broadcast_caption(caption: List[Any]):
     Broadcasts caption data across all ranks so that each rank receives
     the full list of captions from all other ranks.
     """
-    return broadcast(caption)
+    return broadcast_custom(caption)
 
 
 def _all_to_all_4D(

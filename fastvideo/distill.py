@@ -46,6 +46,7 @@ from fastvideo.utils.parallel_states import (
     initialize_sequence_parallel_state,
 )
 from fastvideo.utils.validation import log_validation
+import matplotlib.pyplot as plt
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.31.0")
@@ -165,11 +166,13 @@ def distill_one_step(
                 )
             model_pred = transformer(**teacher_kwargs)[0]
 
+        # rank = int(os.getenv("RANK", 0))
+        # print(f"{rank}_{index}")
         model_pred_0, end_index_0 = solver.euler_style_multiphase_pred_last_step(
             noisy_model_input, model_pred, index, multiphase
         )
 
-        latents_0 = model_pred_0.half() / vae.config.scaling_factor
+        latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
         images_0 = vae.decode(latents_0, return_dict=False)[0]
         images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
         image_rewards = image_reward_fn(images_0.squeeze(2), caption)
@@ -340,7 +343,6 @@ def main(args):
     main_print(f"--> loading model from {args.pretrained_model_name_or_path}")
 
     vae, _, _, _ = load_vae(vae_type="884-16c-hy", vae_precision="fp16", device=device)
-    vae.requires_grad_(False)
 
     transformer = load_transformer(
         args.model_type,
