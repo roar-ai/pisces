@@ -176,12 +176,14 @@ def distill_one_step(
         images_0 = vae.decode(latents_0, return_dict=False)[0]
         images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
         image_rewards = image_reward_fn(images_0.squeeze(2), caption)
-        image_loss = -image_rewards.mean() * 0.1
+        image_loss = -image_rewards.mean() * 0.1 / gradient_accumulation_steps
 
         video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
         global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
-        global_loss = -global_rewards.mean() * 0.2
-        finegrained_loss = -finegrained_rewards.mean() * 0.2
+        global_loss = -global_rewards.mean() * 0.2 / gradient_accumulation_steps
+        finegrained_loss = (
+            -finegrained_rewards.mean() * 0.2 / gradient_accumulation_steps
+        )
 
         # if accelerator.is_main_process:
         model_pred, end_index = solver.euler_style_multiphase_pred(
