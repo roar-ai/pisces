@@ -1,20 +1,20 @@
 #!/bin/bash
 
-num_gpus=4
-export MODEL_BASE=data/FastHunyuan
+num_gpus=8
+export MODEL_BASE=/mnt/minhquan-local/data/hunyuan
 torchrun --nnodes=1 --nproc_per_node=$num_gpus --master_port 29503 \
     fastvideo/sample/sample_t2v_hunyuan.py \
     --height 720 \
     --width 1280 \
     --num_frames 125 \
-    --num_inference_steps 6 \
+    --num_inference_steps 8 \
     --guidance_scale 1 \
     --embedded_cfg_scale 6 \
     --flow_shift 17 \
     --flow-reverse \
-    --prompt ./assets/prompt.txt \
-    --seed 1024 \
-    --output_path outputs_video/hunyuan/vae_sp/ \
+    --prompt /mnt/minhquan/hummingbird-video/VBench/prompts/all_dimension.txt \
+    --seed 0 \
+    --output_path /mnt/minhquan-local/data/outputs_video/hunyuan/vae_sp_8steps/ \
     --model_path $MODEL_BASE \
-    --dit-weight ${MODEL_BASE}/hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt \
+    --dit-weight /mnt/minhquan-local/data/outputs/hy_phase1_shift17_bs_16_HD/checkpoint-256/diffusion_pytorch_model.safetensors \
     --vae-sp

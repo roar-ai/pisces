@@ -180,9 +180,9 @@ def distill_one_step(
 
         video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
         global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
-        global_loss = -global_rewards.mean() * 0.2 / gradient_accumulation_steps
+        global_loss = -global_rewards.mean() * 0.1 / gradient_accumulation_steps
         finegrained_loss = (
-            -finegrained_rewards.mean() * 0.2 / gradient_accumulation_steps
+            -finegrained_rewards.mean() * 0.1 / gradient_accumulation_steps
         )
 
         # if accelerator.is_main_process:
@@ -274,6 +274,8 @@ def distill_one_step(
             model_pred.detach().float(), model_pred_norm, gradient_accumulation_steps
         )
         (distill_loss + image_loss + global_loss + finegrained_loss).backward()
+        # (distill_loss + global_loss + finegrained_loss).backward()
+        # (distill_loss + image_loss).backward()
 
         avg_distill_loss = distill_loss.detach().clone()
         dist.all_reduce(avg_distill_loss, op=dist.ReduceOp.AVG)
@@ -641,8 +643,8 @@ def main(args):
                 {
                     "distill_loss": distill_loss,
                     "image_reward": -1.0 * image_loss / 0.1,
-                    "global_reward": -1.0 * global_loss / 0.2,
-                    "finegrained_reward": -1.0 * finegrained_loss / 0.2,
+                    "global_reward": -1.0 * global_loss / 0.1,
+                    "finegrained_reward": -1.0 * finegrained_loss / 0.1,
                     "learning_rate": lr_scheduler.get_last_lr()[0],
                     "step_time": step_time,
                     "avg_step_time": avg_step_time,

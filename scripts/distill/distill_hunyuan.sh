@@ -63,13 +63,13 @@ torchrun --nnodes 1 --nproc_per_node 8\
     --sp_size 8 \
     --train_sp_batch_size 1\
     --dataloader_num_workers 4\
-    --gradient_accumulation_steps=4\
-    --max_train_steps=100000\
+    --gradient_accumulation_steps=32\
+    --max_train_steps=1000\
     --learning_rate=1e-6\
     --mixed_precision="bf16"\
     --checkpointing_steps=64\
     --validation_steps 64\
-    --validation_sampling_steps "4,8" \
+    --validation_sampling_steps "8,50" \
     --checkpoints_total_limit 3\
     --allow_tf32\
     --ema_start_step 0\
@@ -83,5 +83,5 @@ torchrun --nnodes 1 --nproc_per_node 8\
     --shift 17 \
     --validation_guidance_scale "1.0" \
     --num_euler_timesteps 50 \
-    --multi_phased_distill_schedule "32000-1" \
+    --multi_phased_distill_schedule "4000-1" \
     --not_apply_cfg_solver 
