@@ -346,7 +346,7 @@ def main(args):
 
     main_print(f"--> loading model from {args.pretrained_model_name_or_path}")
 
-    vae, _, _, _ = load_vae(vae_type="884-16c-hy", vae_precision="fp16", device=device)
+    vae, _, _, _ = load_vae(vae_type="884-16c-hy", vae_precision="fp16", device=device, vae_path=f"{args.pretrained_model_name_or_path}/hunyuan-video-t2v-720p/vae")
 
     transformer = load_transformer(
         args.model_type,
@@ -362,7 +362,8 @@ def main(args):
         "vi_clip2_OT",
         precision="fp16",
         rm_ckpt_dir="/mnt/minhquan-local/InternVideo2-Stage2_1B-224p-f4/InternVideo2-stage2_1b-224p-f4.pt",
-        OT_map_ckpt_dir="/mnt/minhquan/hummingbird-video/OT_maps_v1/OT_map_156000.pt",
+        OT_map_ckpt_dir="/media/minhquan/hummingbird-video/OT_maps_v1/OT_map_156000.pt",
+        n_frames=4
     )
     if args.use_ema:
         ema_transformer = deepcopy(transformer)
