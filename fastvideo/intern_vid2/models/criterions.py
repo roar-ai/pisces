@@ -243,6 +243,8 @@ class VTC_VTM_Loss(nn.Module):
         text_proj: torch.Tensor,
         text_atts: torch.Tensor,
         idx: torch.Tensor,
+        valid_tokens=None,
+        use_pot_tokens=False,
     ):
         """video-text matching loss.
 
@@ -316,6 +318,8 @@ class VTC_VTM_Loss(nn.Module):
             encoder_attention_mask=vision_atts,
             return_dict=True,
             mode="fusion",
+            valid_tokens=valid_tokens,
+            use_pot_tokens=use_pot_tokens,
         )
 
         vtm_embeds = output.last_hidden_state[

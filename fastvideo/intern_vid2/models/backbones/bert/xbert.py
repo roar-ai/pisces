@@ -13,7 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch BERT model. """
+"""PyTorch BERT model."""
 
 import math
 import os
@@ -28,22 +28,32 @@ import transformers
 from torch import Tensor, device, dtype, nn
 from torch.nn import CrossEntropyLoss, MSELoss
 from transformers.activations import ACT2FN
+
 # from transformers.models.bert.configuration_bert import BertConfig
 from transformers.configuration_utils import PretrainedConfig
-from transformers.file_utils import (ModelOutput, add_start_docstrings,
-                                     add_start_docstrings_to_model_forward,
-                                     replace_return_docstrings)
+from transformers.file_utils import (
+    ModelOutput,
+    add_start_docstrings,
+    add_start_docstrings_to_model_forward,
+    replace_return_docstrings,
+)
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
-    CausalLMOutputWithCrossAttentions, MaskedLMOutput,
-    MultipleChoiceModelOutput, NextSentencePredictorOutput,
-    QuestionAnsweringModelOutput, SequenceClassifierOutput,
-    TokenClassifierOutput)
-from transformers.modeling_utils import (PreTrainedModel,
-                                         apply_chunking_to_forward,
-                                         find_pruneable_heads_and_indices,
-                                         prune_linear_layer)
+    CausalLMOutputWithCrossAttentions,
+    MaskedLMOutput,
+    MultipleChoiceModelOutput,
+    NextSentencePredictorOutput,
+    QuestionAnsweringModelOutput,
+    SequenceClassifierOutput,
+    TokenClassifierOutput,
+)
+from transformers.modeling_utils import (
+    PreTrainedModel,
+    apply_chunking_to_forward,
+    find_pruneable_heads_and_indices,
+    prune_linear_layer,
+)
 from transformers.utils import logging
 
 transformers.logging.set_verbosity_error()
@@ -78,6 +88,82 @@ BERT_PRETRAINED_MODEL_ARCHIVE_LIST = [
     "wietsedv/bert-base-dutch-cased",
     # See all BERT models at https://huggingface.co/models?filter=bert
 ]
+
+
+def compute_temporal_spatial_cost_matrix(
+    text_embeds,
+    video_embeds,
+    attn_map,
+    frame_indices,
+    spatial_coords,
+    gamma=1.0,
+    eta=1.0,
+):
+    """
+    Compute cost matrix C_{ij} = ||y_i - x_j||^2 + gamma * |τ(y_i) - frame(x_j)| + eta * ||pos(y_i) - pos(x_j)||
+
+    text_embeds: [N, D]         - text token embeddings
+    video_embeds: [M, D]        - visual patch embeddings (CLS + Patches)
+    attn_map: [N, M]            - cross-attention between text token i and patch j
+    frame_indices: [M]          - frame index for each patch
+    spatial_coords: [M, 2]      - (u_j, v_j) for each patch
+
+    Returns:
+        cost matrix C: [N, M]
+    """
+    N, D = text_embeds.shape
+    M = video_embeds.shape[0]
+
+    # Semantic cost
+
+    text_norm = F.normalize(text_embeds, p=2, dim=-1)
+    video_norm = F.normalize(video_embeds, p=2, dim=-1)
+    cos_sim = torch.matmul(text_norm, video_norm.T)
+    semantic_cost = 1 - cos_sim
+
+    # Temporal penalty τ(y_i)
+    tau_y = torch.sum(attn_map * frame_indices.view(1, M), dim=1)  # [N]
+    temporal_penalty = torch.abs(tau_y[:, None] - frame_indices[None, :])  # [N, M]
+
+    # Spatial penalty ||(u_i,v_i) - (u_j,v_j)||
+    u_coords, v_coords = spatial_coords[:, 0], spatial_coords[:, 1]
+    u_y = torch.sum(attn_map * u_coords.view(1, M), dim=1)
+    v_y = torch.sum(attn_map * v_coords.view(1, M), dim=1)
+    spatial_penalty = torch.sqrt(
+        (u_y[:, None] - u_coords[None, :]).abs()
+        + (v_y[:, None] - v_coords[None, :]).abs()
+    )
+
+    # Final cost matrix
+    cost_matrix = semantic_cost + gamma * temporal_penalty + eta * spatial_penalty
+    return cost_matrix  # [N, M]
+
+
+def solve_partial_ot(cost_matrix, epsilon=0.05, frac_mass=0.8):
+    """
+    Solves the partial OT problem using entropic regularization.
+    """
+    import ot.partial
+
+    N, M = cost_matrix.shape
+    a = torch.ones(N) / N
+    b = torch.ones(M) / M
+
+    C_np = cost_matrix.detach().cpu().numpy()
+    a_np = a.numpy()
+    b_np = b.numpy()
+
+    P_np = ot.partial.entropic_partial_wasserstein(
+        a_np,
+        b_np,
+        C_np,
+        m=frac_mass,
+        reg=epsilon,
+        numItermax=1000,
+        stopThr=1e-7,
+        log=False,
+    )
+    return torch.tensor(P_np, dtype=torch.float32, device=cost_matrix.device)
 
 
 class BertConfig(PretrainedConfig):
@@ -145,6 +231,7 @@ class BertConfig(PretrainedConfig):
     >>> # Accessing the model configuration
     >>> configuration = model.config
     ```"""
+
     model_type = "bert"
 
     def __init__(
@@ -280,7 +367,9 @@ class BertEmbeddings(nn.Module):
         self.position_embeddings = nn.Embedding(
             config.max_position_embeddings, config.hidden_size
         )
-        self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
+        self.token_type_embeddings = nn.Embedding(
+            config.type_vocab_size, config.hidden_size
+        )
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
@@ -291,7 +380,9 @@ class BertEmbeddings(nn.Module):
         self.register_buffer(
             "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1))
         )
-        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
+        self.position_embedding_type = getattr(
+            config, "position_embedding_type", "absolute"
+        )
 
         self.config = config
 
@@ -359,7 +450,9 @@ class BertSelfAttention(nn.Module):
             self.value = nn.Linear(config.hidden_size, self.all_head_size)
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
-        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
+        self.position_embedding_type = getattr(
+            config, "position_embedding_type", "absolute"
+        )
         if (
             self.position_embedding_type == "relative_key"
             or self.position_embedding_type == "relative_key_query"
@@ -383,7 +476,10 @@ class BertSelfAttention(nn.Module):
         return self.attention_map
 
     def transpose_for_scores(self, x):
-        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        new_x_shape = x.size()[:-1] + (
+            self.num_attention_heads,
+            self.attention_head_size,
+        )
         x = x.view(*new_x_shape)
         return x.permute(0, 2, 1, 3)
 
@@ -396,6 +492,8 @@ class BertSelfAttention(nn.Module):
         encoder_attention_mask=None,
         past_key_value=None,
         output_attentions=False,
+        valid_tokens=None,
+        use_pot_tokens=False,
     ):
         mixed_query_layer = self.query(hidden_states)
 
@@ -469,6 +567,69 @@ class BertSelfAttention(nn.Module):
         # Normalize the attention scores to probabilities.
         attention_probs = nn.Softmax(dim=-1)(attention_scores)
 
+        if is_cross_attention and use_pot_tokens:
+            device = encoder_hidden_states.device
+            patches_per_frame = 256
+            num_frames = (encoder_hidden_states.size(1) - 1) // patches_per_frame
+            frame_indices = torch.cat(
+                [
+                    torch.tensor([-1]),  # CLS token (no frame)
+                    *[
+                        torch.ones(patches_per_frame) * fr_id
+                        for fr_id in range(num_frames)
+                    ],
+                ],
+                dim=0,
+            ).to(device)
+
+            # Generate 16x16 grid for a frame
+            h, w = 16, 16
+            grid = torch.stack(
+                torch.meshgrid(
+                    torch.arange(h),
+                    torch.arange(w),
+                    indexing="ij",
+                ),
+                dim=-1,
+            ).reshape(
+                -1, 2
+            )  # [256, 2]
+
+            # CLS gets (-1, -1)
+            cls_coord = torch.tensor([[-1, -1]])
+
+            spatial_coords = (
+                torch.cat([cls_coord, *([grid] * num_frames)], dim=0).float().to(device)
+            )
+            video_embeddings = self.key(encoder_hidden_states).squeeze().float()
+            text_embeddings = mixed_query_layer.squeeze().float()[valid_tokens]
+            Ps = []
+            attn_maps = attention_probs.squeeze().float()
+            for i in range(attn_maps.size(0)):
+                attn_map = attn_maps[i][valid_tokens]
+                C = compute_temporal_spatial_cost_matrix(
+                    text_embeds=text_embeddings,
+                    video_embeds=video_embeddings,
+                    attn_map=attn_map,
+                    frame_indices=frame_indices,
+                    spatial_coords=spatial_coords,
+                    gamma=0.1,
+                    eta=0.2,
+                )
+                P = solve_partial_ot(C, epsilon=0.05, frac_mass=0.9)
+                Ps.append(P)
+            Ps = torch.stack(Ps, dim=0).unsqueeze(0).half() * len(valid_tokens)
+
+            # attention_probs[:, :, valid_tokens] = (
+            #     0.5 * attention_probs[:, :, valid_tokens] + 0.5 * Ps
+            # )
+
+            updated_attention_probs = attention_probs.clone()
+            updated_attention_probs[:, :, valid_tokens] = (
+                0.5 * attention_probs[:, :, valid_tokens] + 0.5 * Ps
+            )
+            attention_probs = updated_attention_probs
+
         if is_cross_attention and self.save_attention:
             self.save_attention_map(attention_probs)
             attention_probs.register_hook(self.save_attn_gradients)
@@ -539,7 +700,9 @@ class BertAttention(nn.Module):
 
         # Update hyper params and store pruned heads
         self.self.num_attention_heads = self.self.num_attention_heads - len(heads)
-        self.self.all_head_size = self.self.attention_head_size * self.self.num_attention_heads
+        self.self.all_head_size = (
+            self.self.attention_head_size * self.self.num_attention_heads
+        )
         self.pruned_heads = self.pruned_heads.union(heads)
 
     def forward(
@@ -551,6 +714,8 @@ class BertAttention(nn.Module):
         encoder_attention_mask=None,
         past_key_value=None,
         output_attentions=False,
+        valid_tokens=None,
+        use_pot_tokens=False,
     ):
         self_outputs = self.self(
             hidden_states,
@@ -560,6 +725,8 @@ class BertAttention(nn.Module):
             encoder_attention_mask,
             past_key_value,
             output_attentions,
+            valid_tokens=valid_tokens,
+            use_pot_tokens=use_pot_tokens,
         )
         attention_output = self.output(self_outputs[0], hidden_states)
         # add attentions if we output them
@@ -619,9 +786,13 @@ class BertLayer(nn.Module):
         encoder_attention_mask=None,
         past_key_value=None,
         output_attentions=False,
+        valid_tokens=None,
+        use_pot_tokens=False,
     ):
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
-        self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
+        self_attn_past_key_value = (
+            past_key_value[:2] if past_key_value is not None else None
+        )
         self_attention_outputs = self.attention(
             hidden_states,
             attention_mask,
@@ -665,6 +836,8 @@ class BertLayer(nn.Module):
                     encoder_hidden_states,
                     encoder_attention_mask,
                     output_attentions=output_attentions,
+                    valid_tokens=valid_tokens,
+                    use_pot_tokens=use_pot_tokens,
                 )  # (context_layer, attention_probs, attention_scores, past_key_value,)
                 attention_output = cross_attention_outputs[0]
                 # add cross attentions if we output attention weights
@@ -710,6 +883,8 @@ class BertEncoder(nn.Module):
         return_dict=True,
         mode="multi_modal",
         normalize_attention=True,
+        valid_tokens=None,
+        use_pot_tokens=False,
     ):
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
@@ -765,15 +940,28 @@ class BertEncoder(nn.Module):
                     use_reentrant=False,
                 )
             else:
-                layer_outputs = layer_module(
-                    hidden_states,
-                    attention_mask,
-                    layer_head_mask,
-                    encoder_hidden_states,
-                    encoder_attention_mask,
-                    past_key_value,
-                    output_attentions,
-                )  # (context_layer, attention_probs, attention_scores, past_key_value,)
+                if hasattr(layer_module, "crossattention"):
+                    layer_outputs = layer_module(
+                        hidden_states,
+                        attention_mask,
+                        layer_head_mask,
+                        encoder_hidden_states,
+                        encoder_attention_mask,
+                        past_key_value,
+                        output_attentions,
+                        valid_tokens=valid_tokens,
+                        use_pot_tokens=use_pot_tokens,
+                    )  # (context_layer, attention_probs, attention_scores, past_key_value,)
+                else:
+                    layer_outputs = layer_module(
+                        hidden_states,
+                        attention_mask,
+                        layer_head_mask,
+                        encoder_hidden_states,
+                        encoder_attention_mask,
+                        past_key_value,
+                        output_attentions,
+                    )  # (context_layer, attention_probs, attention_scores, past_key_value,)
             hidden_states = layer_outputs[0]
             if use_cache:
                 next_decoder_cache += (layer_outputs[-1],)
@@ -785,7 +973,9 @@ class BertEncoder(nn.Module):
                 all_self_attentions = all_self_attentions + (layer_outputs[2 - offset],)
                 if hasattr(layer_module, "crossattention"):
                     # all_cross_attentions = all_cross_attentions + (layer_outputs[3], )
-                    all_cross_attentions = all_cross_attentions + (layer_outputs[4 - offset],)
+                    all_cross_attentions = all_cross_attentions + (
+                        layer_outputs[4 - offset],
+                    )
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
@@ -1047,7 +1237,11 @@ class BertModel(BertPreTrainedModel):
             self.encoder.layer[layer].attention.prune_heads(heads)
 
     def get_extended_attention_mask(
-        self, attention_mask: Tensor, input_shape: Tuple[int], device: device, is_decoder: bool
+        self,
+        attention_mask: Tensor,
+        input_shape: Tuple[int],
+        device: device,
+        is_decoder: bool,
     ) -> Tensor:
         """
         Makes broadcastable attention and causal masks so that future and masked tokens are ignored.
@@ -1138,6 +1332,8 @@ class BertModel(BertPreTrainedModel):
         is_decoder=False,
         mode="multi_modal",
         normalize_attention=True,
+        valid_tokens=None,
+        use_pot_tokens=False,
     ):
         r"""
         encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
@@ -1167,7 +1363,9 @@ class BertModel(BertPreTrainedModel):
             if output_hidden_states is not None
             else self.config.output_hidden_states
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         if is_decoder:
             use_cache = use_cache if use_cache is not None else self.config.use_cache
@@ -1221,7 +1419,9 @@ class BertModel(BertPreTrainedModel):
                     0
                 ].size()
             else:
-                encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
+                encoder_batch_size, encoder_sequence_length, _ = (
+                    encoder_hidden_states.size()
+                )
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
 
             if type(encoder_attention_mask) == list:
@@ -1271,9 +1471,13 @@ class BertModel(BertPreTrainedModel):
             return_dict=return_dict,
             mode=mode,
             normalize_attention=normalize_attention,
+            valid_tokens=valid_tokens,
+            use_pot_tokens=use_pot_tokens,
         )
         sequence_output = encoder_outputs[0]
-        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
+        pooled_output = (
+            self.pooler(sequence_output) if self.pooler is not None else None
+        )
 
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]
@@ -1353,7 +1557,9 @@ class BertForPreTraining(BertPreTrainedModel):
             >>> prediction_logits = outputs.prediction_logits
             >>> seq_relationship_logits = outputs.seq_relationship_logits
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.bert(
             input_ids,
@@ -1368,7 +1574,9 @@ class BertForPreTraining(BertPreTrainedModel):
         )
 
         sequence_output, pooled_output = outputs[:2]
-        prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output)
+        prediction_scores, seq_relationship_score = self.cls(
+            sequence_output, pooled_output
+        )
 
         total_loss = None
         if labels is not None and next_sentence_label is not None:
@@ -1479,7 +1687,9 @@ class BertLMHeadModel(BertPreTrainedModel):
             >>> outputs = model(**inputs)
             >>> prediction_logits = outputs.logits
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
         if labels is not None:
             use_cache = False
 
@@ -1505,8 +1715,6 @@ class BertLMHeadModel(BertPreTrainedModel):
             normalize_attention=normalize_attention,
         )
 
-
-
         sequence_output = outputs[0]
         prediction_scores = self.cls(sequence_output)
         # logger.info(f"new: {labels.min()}, {labels.max()} {prediction_scores.shape}")
@@ -1525,7 +1733,8 @@ class BertLMHeadModel(BertPreTrainedModel):
             # logger.info(f"after {self.config.vocab_size}, {labels.min()}, {labels.max()}")
             loss_fct = CrossEntropyLoss(reduction=reduction)
             lm_loss = loss_fct(
-                shifted_prediction_scores.view(-1, self.config.vocab_size), labels.view(-1)
+                shifted_prediction_scores.view(-1, self.config.vocab_size),
+                labels.view(-1),
             )
             if reduction == "none":
                 lm_loss = lm_loss.view(prediction_scores.size(0), -1).sum(1)
@@ -1575,7 +1784,9 @@ class BertLMHeadModel(BertPreTrainedModel):
         reordered_past = ()
         for layer_past in past:
             reordered_past += (
-                tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),
+                tuple(
+                    past_state.index_select(0, beam_idx) for past_state in layer_past
+                ),
             )
         return reordered_past
 
@@ -1642,7 +1853,9 @@ class BertForMaskedLM(BertPreTrainedModel):
             (masked), the loss is only computed for the tokens with labels in ``[0, ..., config.vocab_size]``
         """
 
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.bert(
             input_ids,
@@ -1685,7 +1898,9 @@ class BertForMaskedLM(BertPreTrainedModel):
 
         if not return_dict:
             output = (prediction_scores,) + outputs[2:]
-            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
+            return (
+                ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
+            )
 
         # changed from MaskedLMOutput to MaskedLMOutputWithDistill
         return MaskedLMOutputWithDistill(
@@ -1696,7 +1911,9 @@ class BertForMaskedLM(BertPreTrainedModel):
             attentions=outputs.attentions,
         )
 
-    def prepare_inputs_for_generation(self, input_ids, attention_mask=None, **model_kwargs):
+    def prepare_inputs_for_generation(
+        self, input_ids, attention_mask=None, **model_kwargs
+    ):
         input_shape = input_ids.shape
         effective_batch_size = input_shape[0]
 
@@ -1705,7 +1922,8 @@ class BertForMaskedLM(BertPreTrainedModel):
             self.config.pad_token_id is not None
         ), "The PAD token should be defined for generation"
         attention_mask = torch.cat(
-            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))], dim=-1
+            [attention_mask, attention_mask.new_zeros((attention_mask.shape[0], 1))],
+            dim=-1,
         )
         dummy_token = torch.full(
             (effective_batch_size, 1),
@@ -1778,7 +1996,9 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
             )
             labels = kwargs.pop("next_sentence_label")
 
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.bert(
             input_ids,
@@ -1799,12 +2019,16 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         next_sentence_loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss()
-            next_sentence_loss = loss_fct(seq_relationship_scores.view(-1, 2), labels.view(-1))
+            next_sentence_loss = loss_fct(
+                seq_relationship_scores.view(-1, 2), labels.view(-1)
+            )
 
         if not return_dict:
             output = (seq_relationship_scores,) + outputs[2:]
             return (
-                ((next_sentence_loss,) + output) if next_sentence_loss is not None else output
+                ((next_sentence_loss,) + output)
+                if next_sentence_loss is not None
+                else output
             )
 
         return NextSentencePredictorOutput(
@@ -1852,7 +2076,9 @@ class BertForSequenceClassification(BertPreTrainedModel):
             config.num_labels - 1]`. If :obj:`config.num_labels == 1` a regression loss is computed (Mean-Square loss),
             If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.bert(
             input_ids,
@@ -1929,10 +2155,16 @@ class BertForMultipleChoice(BertPreTrainedModel):
             num_choices-1]`` where :obj:`num_choices` is the size of the second dimension of the input tensors. (See
             :obj:`input_ids` above)
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        num_choices = input_ids.shape[1] if input_ids is not None else inputs_embeds.shape[1]
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
+        num_choices = (
+            input_ids.shape[1] if input_ids is not None else inputs_embeds.shape[1]
+        )
 
-        input_ids = input_ids.view(-1, input_ids.size(-1)) if input_ids is not None else None
+        input_ids = (
+            input_ids.view(-1, input_ids.size(-1)) if input_ids is not None else None
+        )
         attention_mask = (
             attention_mask.view(-1, attention_mask.size(-1))
             if attention_mask is not None
@@ -1944,7 +2176,9 @@ class BertForMultipleChoice(BertPreTrainedModel):
             else None
         )
         position_ids = (
-            position_ids.view(-1, position_ids.size(-1)) if position_ids is not None else None
+            position_ids.view(-1, position_ids.size(-1))
+            if position_ids is not None
+            else None
         )
         inputs_embeds = (
             inputs_embeds.view(-1, inputs_embeds.size(-2), inputs_embeds.size(-1))
@@ -2026,7 +2260,9 @@ class BertForTokenClassification(BertPreTrainedModel):
             Labels for computing the token classification loss. Indices should be in ``[0, ..., config.num_labels -
             1]``.
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.bert(
             input_ids,
@@ -2117,7 +2353,9 @@ class BertForQuestionAnswering(BertPreTrainedModel):
             Positions are clamped to the length of the sequence (:obj:`sequence_length`). Position outside of the
             sequence are not taken into account for computing the loss.
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.bert(
             input_ids,
@@ -2166,5 +2404,3 @@ class BertForQuestionAnswering(BertPreTrainedModel):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-

@@ -502,7 +502,16 @@ class InternVideo2_Stage2_Rewards(nn.Module):
         )
         return loss_vtc, loss_vtm
 
-    def reward_OT(self, OT_map, image, text, idx, media_type="image"):
+    def reward_OT(
+        self,
+        OT_map,
+        image,
+        text,
+        idx,
+        valid_tokens=None,
+        use_pot_tokens=False,
+        media_type="image",
+    ):
         """forward and calculate loss.
 
         Args:
@@ -549,6 +558,8 @@ class InternVideo2_Stage2_Rewards(nn.Module):
             text_proj,
             text.attention_mask,
             idx,
+            valid_tokens=valid_tokens,
+            use_pot_tokens=use_pot_tokens,
         )
         return loss_vtc, loss_vtm
 
@@ -686,7 +697,7 @@ class InternVideo2_Stage2_Rewards(nn.Module):
                 targets_clip_final_vis,
             )
 
-    def encode_text(self, text):
+    def encode_text(self, text, valid_tokens=None, use_pot_tokens=False):
         """encode text.
         Args:
             text (dict): The output of huggingface's `PreTrainedTokenizer`. contains keys:
@@ -703,6 +714,8 @@ class InternVideo2_Stage2_Rewards(nn.Module):
             attention_mask=text.attention_mask,
             return_dict=True,
             mode="text",
+            valid_tokens=valid_tokens,
+            use_pot_tokens=use_pot_tokens,
         )
         text_embeds = text_output.last_hidden_state
         pooled_text_embeds = text_embeds[:, 0]

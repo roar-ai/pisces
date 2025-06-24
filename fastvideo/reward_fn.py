@@ -238,10 +238,12 @@ def get_vi_clip_score_fn(rm_ckpt_dir: str, precision="amp", n_frames=8):
 
 
 def get_intern_vid2_score_fn(rm_ckpt_dir: str, precision="amp", n_frames=8):
-    from intern_vid2.demo_config import Config, eval_dict_leaf
-    from intern_vid2.demo_utils import setup_internvideo2
+    from fastvideo.intern_vid2.demo_config import Config, eval_dict_leaf
+    from fastvideo.intern_vid2.demo_utils import setup_internvideo2
 
-    config = Config.from_file("intern_vid2/configs/internvideo2_stage2_config.py")
+    config = Config.from_file(
+        "fastvideo/intern_vid2/configs/internvideo2_stage2_config.py"
+    )
     config = eval_dict_leaf(config)
     config["inputs"]["video_input"]["num_frames"] = n_frames
     config["inputs"]["video_input"]["num_frames_test"] = n_frames
@@ -359,7 +361,15 @@ def get_intern_vid2_OT_score_fn(
             # _, text_features = vi_clip.encode_text(text)
             # text_features = vi_clip.text_proj(text_features)
             # text_features /= text_features.norm(dim=-1, keepdim=True)
-        r_global, r_finegrained = vi_clip.reward_OT(T, pixel_values, text, None)
+
+            pad_token_id = tokenizer.pad_token_id
+            input_ids = text["input_ids"][0]  # shape: [40]
+            valid_mask = input_ids != pad_token_id
+            valid_indices = valid_mask.nonzero(as_tuple=False).squeeze(1)  # [N_valid]
+
+        r_global, r_finegrained = vi_clip.reward_OT(
+            T, pixel_values, text, None, valid_tokens=valid_indices, use_pot_tokens=True
+        )
         return r_global, r_finegrained
         # score = (video_features * text_features).sum(-1)
         # return score
