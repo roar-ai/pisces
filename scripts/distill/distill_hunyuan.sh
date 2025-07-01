@@ -50,7 +50,7 @@ IP=[MASTER NODE IP]
 
 # If you do not have 32 GPUs and to fit in memory, you can: 1. increase sp_size. 2. reduce num_latent_t
 torchrun --nnodes 1 --nproc_per_node 8 \
-    fastvideo/distill.py\
+    fastvideo/distill_grpo.py\
     --seed 42\
     --pretrained_model_name_or_path $DATA_DIR/hunyuan\
     --dit_model_name_or_path $DATA_DIR/hunyuan/hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt\
@@ -76,7 +76,7 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     --ema_start_step 0\
     --cfg 0.0\
     --log_validation\
-    --output_dir="$DATA_DIR/outputs/hy_phase1_shift17_bs_16_HD_without_ot"\
+    --output_dir="$DATA_DIR/outputs/hy_phase1_shift17_bs_16_HD_without_ot_grpo"\
     --tracker_project_name Hunyuan_Distill \
     --num_height 720 \
     --num_width 1280 \

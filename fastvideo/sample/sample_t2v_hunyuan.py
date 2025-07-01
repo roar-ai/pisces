@@ -51,7 +51,7 @@ def main(args):
     with open(args.prompt) as f:
         prompts = f.readlines()
 
-    for prompt in prompts:
+    for prompt in prompts[497:]:
         prompt = prompt.replace("\n", "")
         for seed_int in range(5):
             outputs = hunyuan_video_sampler.predict(
