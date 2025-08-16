@@ -51,4 +51,4 @@ outputs_video
 sbatch.sh
 *.out
 env
-flash-attention
+flash-attention/

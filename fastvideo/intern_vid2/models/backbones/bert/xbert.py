@@ -90,80 +90,234 @@ BERT_PRETRAINED_MODEL_ARCHIVE_LIST = [
 ]
 
 
+# def compute_temporal_spatial_cost_matrix(
+#     text_embeds,
+#     video_embeds,
+#     attn_map,
+#     frame_indices,
+#     spatial_coords,
+#     gamma=1.0,
+#     eta=1.0,
+# ):
+#     """
+#     Compute cost matrix C_{ij} = ||y_i - x_j||^2 + gamma * |τ(y_i) - frame(x_j)| + eta * ||pos(y_i) - pos(x_j)||
+
+#     text_embeds: [N, D]         - text token embeddings
+#     video_embeds: [M, D]        - visual patch embeddings (CLS + Patches)
+#     attn_map: [N, M]            - cross-attention between text token i and patch j
+#     frame_indices: [M]          - frame index for each patch
+#     spatial_coords: [M, 2]      - (u_j, v_j) for each patch
+
+#     Returns:
+#         cost matrix C: [N, M]
+#     """
+#     N, D = text_embeds.shape
+#     M = video_embeds.shape[0]
+
+#     # Semantic cost
+
+#     text_norm = F.normalize(text_embeds, p=2, dim=-1)
+#     video_norm = F.normalize(video_embeds, p=2, dim=-1)
+#     cos_sim = torch.matmul(text_norm, video_norm.T).to(torch.float32)
+#     semantic_cost = 1 - cos_sim
+
+#     # Temporal penalty τ(y_i)
+#     # num_frames = frame_indices.max()
+#     tau_y = torch.sum(attn_map * frame_indices.view(1, M), dim=1)  # [N]
+#     temporal_penalty = torch.abs(tau_y[:, None] - frame_indices[None, :])  # [N, M]
+
+#     # Spatial penalty ||(u_i,v_i) - (u_j,v_j)||
+#     u_coords, v_coords = spatial_coords[:, 0], spatial_coords[:, 1]
+#     u_y = torch.sum(attn_map * u_coords.view(1, M), dim=1)
+#     v_y = torch.sum(attn_map * v_coords.view(1, M), dim=1)
+#     spatial_penalty = torch.sqrt(
+#         (u_y[:, None] - u_coords[None, :]).abs()
+#         + (v_y[:, None] - v_coords[None, :]).abs()
+#     )
+
+#     # Final cost matrix
+#     cost_matrix = semantic_cost + gamma * temporal_penalty + eta * spatial_penalty
+#     return cost_matrix  # [N, M]
+
+
+# ...existing code...
 def compute_temporal_spatial_cost_matrix(
-    text_embeds,
-    video_embeds,
-    attn_map,
-    frame_indices,
-    spatial_coords,
-    gamma=1.0,
-    eta=1.0,
+    text_embeds: torch.Tensor,
+    video_embeds: torch.Tensor,
+    attn_map: torch.Tensor,
+    frame_indices: torch.Tensor,
+    spatial_coords: torch.Tensor,
+    gamma: float = 1.0,
+    eta: float = 1.0,
+    normalize_attention: bool = False,
+    normalize_components: bool = True,
+    eps: float = 1e-6,
 ):
     """
-    Compute cost matrix C_{ij} = ||y_i - x_j||^2 + gamma * |τ(y_i) - frame(x_j)| + eta * ||pos(y_i) - pos(x_j)||
+    Compute cost matrix:
+        C_ij = semantic(i,j) + gamma * temporal(i,j) + eta * spatial(i,j)
 
-    text_embeds: [N, D]         - text token embeddings
-    video_embeds: [M, D]        - visual patch embeddings (CLS + Patches)
-    attn_map: [N, M]            - cross-attention between text token i and patch j
-    frame_indices: [M]          - frame index for each patch
-    spatial_coords: [M, 2]      - (u_j, v_j) for each patch
+    semantic(i,j): 1 - cos_sim(y_i, x_j)  (clamped to [0,2])
+    temporal(i,j): | E_attn[frame | y_i] - frame_j | (optionally normalized)
+    spatial(i,j):  || E_attn[pos | y_i] - pos_j ||_2 (optionally normalized)
+
+    Args:
+        text_embeds:  [N, D]
+        video_embeds: [M, D]
+        attn_map:     [N, M] (not necessarily normalized)
+        frame_indices:[M] (can include -1 for CLS; those rows will still work)
+        spatial_coords:[M, 2] integer or float coordinates (e.g. 16x16 grid with CLS at (-1,-1))
+        gamma, eta: weighting factors
+        normalize_attention: if True, row-normalize attn_map
+        normalize_components: if True, scale temporal & spatial terms to ~[0,1] before weighting
+        eps: small constant for numerical stability
 
     Returns:
-        cost matrix C: [N, M]
+        cost_matrix: [N, M] (float32, finite)
     """
+    device = text_embeds.device
     N, D = text_embeds.shape
     M = video_embeds.shape[0]
 
-    # Semantic cost
+    # 1. Normalize / guard attention
+    if normalize_attention:
+        row_sums = attn_map.sum(dim=1, keepdim=True).clamp_min(eps)
+        A = attn_map / row_sums
+    else:
+        A = attn_map
 
+    # 2. Semantic cost (cosine)
     text_norm = F.normalize(text_embeds, p=2, dim=-1)
     video_norm = F.normalize(video_embeds, p=2, dim=-1)
-    cos_sim = torch.matmul(text_norm, video_norm.T)
-    semantic_cost = 1 - cos_sim
+    cos_sim = text_norm @ video_norm.t()  # [N,M]
+    semantic_cost = (1.0 - cos_sim).clamp_min(0.0)  # in [0,2]
 
-    # Temporal penalty τ(y_i)
-    tau_y = torch.sum(attn_map * frame_indices.view(1, M), dim=1)  # [N]
-    temporal_penalty = torch.abs(tau_y[:, None] - frame_indices[None, :])  # [N, M]
+    # 3. Temporal penalty
+    frame_indices_f = frame_indices.to(device).float()
+    # Expectation of frame index under attention for each text token
+    tau_y = (A * frame_indices_f.view(1, M)).sum(dim=1)  # [N]
+    temporal_penalty = (tau_y.view(N, 1) - frame_indices_f.view(1, M)).abs()  # [N,M]
+    # Optional normalization to [0,1]
+    if normalize_components:
+        fr_range = (frame_indices_f.max() - frame_indices_f.min()).clamp_min(1.0)
+        temporal_penalty = temporal_penalty / fr_range
 
-    # Spatial penalty ||(u_i,v_i) - (u_j,v_j)||
-    u_coords, v_coords = spatial_coords[:, 0], spatial_coords[:, 1]
-    u_y = torch.sum(attn_map * u_coords.view(1, M), dim=1)
-    v_y = torch.sum(attn_map * v_coords.view(1, M), dim=1)
-    spatial_penalty = torch.sqrt(
-        (u_y[:, None] - u_coords[None, :]).abs()
-        + (v_y[:, None] - v_coords[None, :]).abs()
-    )
+    # 4. Spatial penalty (Euclidean)
+    coords = spatial_coords.to(device).float()  # [M,2]
+    # If coords contain sentinel (-1,-1) for CLS, keep them; normalization will handle.
+    # Scale coords to [0,1] range per dimension for stability
 
-    # Final cost matrix
+    c_min, _ = coords.min(dim=0)
+    c_max, _ = coords.max(dim=0)
+    c_range = (c_max - c_min).clamp_min(1.0)
+    coords_norm = (coords - c_min) / c_range  # [M,2] in [0,1]
+
+    # Expected position for each text token
+    pos_expect = (A.unsqueeze(-1) * coords.unsqueeze(0)).sum(dim=1)  # [N,2]
+    diff = pos_expect.unsqueeze(1) - coords.unsqueeze(0)  # [N,M,2]
+    spatial_penalty = diff.pow(2).sum(-1).sqrt()  # [N,M] in [0,~sqrt(2)]
+
+    if normalize_components:
+        spatial_penalty = spatial_penalty / math.sqrt(2.0)
+
+    # 5. Combine
     cost_matrix = semantic_cost + gamma * temporal_penalty + eta * spatial_penalty
-    return cost_matrix  # [N, M]
+
+    # 6. Normalize whole matrix to [0,1] to keep dynamic range tame for OT
+    if normalize_components:
+        c_min = cost_matrix.min()
+        c_max = cost_matrix.max()
+        span = (c_max - c_min).clamp_min(eps)
+        cost_matrix = (cost_matrix - c_min) / span
+
+    # 7. Replace any non-finite values (should not happen, but guard)
+    if not torch.isfinite(cost_matrix).all():
+        cost_matrix = torch.nan_to_num(cost_matrix, nan=1.0, posinf=1.0, neginf=1.0)
+
+    return cost_matrix.to(dtype=torch.float32).contiguous()
+
+
+# ...existing code...
 
 
 def solve_partial_ot(cost_matrix, epsilon=0.05, frac_mass=0.8):
     """
-    Solves the partial OT problem using entropic regularization.
+    Torch (GPU) Sinkhorn solver that approximates partial OT via unbalanced OT.
+    Keeps the original signature for minimal code changes.
+
+    Args:
+        cost_matrix (Tensor): [N, M] cost on the current device
+        epsilon (float): entropic regularization temperature
+        frac_mass (float): desired transported mass fraction in (0,1]; we map it
+                           heuristically to unbalanced strength.
+
+    Returns:
+        P (Tensor): [N, M] transport plan (float32) on the same device.
     """
-    import ot.partial
+    import math
+    import torch
+    import torch.nn.functional as F
 
-    N, M = cost_matrix.shape
-    a = torch.ones(N) / N
-    b = torch.ones(M) / M
+    C = cost_matrix
+    dev = C.device
+    dtype = torch.float32 if C.dtype in (torch.float16, torch.bfloat16) else C.dtype
+    C = C.to(dtype)
 
-    C_np = cost_matrix.detach().cpu().numpy()
-    a_np = a.numpy()
-    b_np = b.numpy()
+    N, M = C.shape
+    if N == 0 or M == 0:
+        return torch.zeros((N, M), device=dev, dtype=dtype)
 
-    P_np = ot.partial.entropic_partial_wasserstein(
-        a_np,
-        b_np,
-        C_np,
-        m=frac_mass,
-        reg=epsilon,
-        numItermax=1000,
-        stopThr=1e-7,
-        log=False,
-    )
-    return torch.tensor(P_np, dtype=torch.float32, device=cost_matrix.device)
+    # Uniform marginals
+    a = torch.full((N,), 1.0 / N, device=dev, dtype=dtype)
+    b = torch.full((M,), 1.0 / M, device=dev, dtype=dtype)
+
+    # Map partial mass m to unbalanced parameter rho using tau = rho / (rho + eps) ≈ m
+    # => rho = eps * m / (1 - m).  Clamp to avoid degenerate cases.
+    m = float(max(1e-4, min(0.9999, frac_mass)))
+    if m >= 0.999:
+        rho = float("inf")  # balanced
+    else:
+        rho = epsilon * m / (1.0 - m)
+
+    def _tau(r):
+        return 1.0 if math.isinf(r) else float(r) / (float(r) + float(epsilon))
+
+    tau_a = _tau(rho)
+    tau_b = _tau(rho)
+
+    # Log-domain Sinkhorn
+    def _stabilize(x, floor=-1e9):
+        return torch.clamp(x, min=floor)
+
+    logK = -C / epsilon  # [N,M]
+    logu = torch.zeros(N, device=dev, dtype=dtype)
+    logv = torch.zeros(M, device=dev, dtype=dtype)
+    loga = torch.log(a.clamp_min(1e-20))
+    logb = torch.log(b.clamp_min(1e-20))
+
+    max_iter = 200
+    tol = 1e-3
+
+    for _ in range(max_iter):
+        # log(K v)
+        logKv = torch.logsumexp(_stabilize(logK + logv.unsqueeze(0)), dim=-1)  # [N]
+        logu_new = tau_a * (loga - logKv)
+
+        # log(K^T u)
+        logKu = torch.logsumexp(
+            _stabilize(logK.t() + logu_new.unsqueeze(0)), dim=-1
+        )  # [M]
+        logv_new = tau_b * (logb - logKu)
+
+        du = (logu_new - logu).abs().max().item()
+        dv = (logv_new - logv).abs().max().item()
+        logu, logv = logu_new, logv_new
+        if max(du, dv) < tol:
+            break
+
+    logP = logu.unsqueeze(1) + logK + logv.unsqueeze(0)  # [N,M]
+    P = torch.exp(_stabilize(logP))
+    return P.to(torch.float32)
 
 
 class BertConfig(PretrainedConfig):
@@ -568,67 +722,121 @@ class BertSelfAttention(nn.Module):
         attention_probs = nn.Softmax(dim=-1)(attention_scores)
 
         if is_cross_attention and use_pot_tokens:
+            # NOTE: POT augmentation branch – compute everything under no_grad to save memory.
+            # Gradients through the transport plan itself are currently not used (only mixed back via attention_probs).
             device = encoder_hidden_states.device
-            patches_per_frame = 256
-            num_frames = (encoder_hidden_states.size(1) - 1) // patches_per_frame
-            frame_indices = torch.cat(
-                [
-                    torch.tensor([-1]),  # CLS token (no frame)
-                    *[
-                        torch.ones(patches_per_frame) * fr_id
-                        for fr_id in range(num_frames)
-                    ],
-                ],
-                dim=0,
-            ).to(device)
+            with torch.no_grad():
+                patches_per_frame = 256
+                num_frames = (encoder_hidden_states.size(1) - 1) // patches_per_frame
+                B = encoder_hidden_states.size(0)
+                if B != 1:
+                    Ps = None  # Skip POT for batch >1 to avoid mixing samples incorrectly.
+                else:
+                    # Frame indices (CLS token assigned -1)
+                    frame_indices = torch.cat(
+                        [
+                            torch.tensor([-1], device=device),
+                            *[
+                                torch.full((patches_per_frame,), fr_id, device=device)
+                                for fr_id in range(num_frames)
+                            ],
+                        ],
+                        dim=0,
+                    )
 
-            # Generate 16x16 grid for a frame
-            h, w = 16, 16
-            grid = torch.stack(
-                torch.meshgrid(
-                    torch.arange(h),
-                    torch.arange(w),
-                    indexing="ij",
-                ),
-                dim=-1,
-            ).reshape(
-                -1, 2
-            )  # [256, 2]
+                    # Spatial coordinates (16x16 grid per frame + CLS)
+                    h = w = 16
+                    grid = torch.stack(
+                        torch.meshgrid(
+                            torch.arange(h, device=device),
+                            torch.arange(w, device=device),
+                            indexing="ij",
+                        ),
+                        dim=-1,
+                    ).reshape(-1, 2)
+                    cls_coord = torch.tensor([[-1, -1]], device=device)
+                    spatial_coords = torch.cat(
+                        [cls_coord, *([grid] * num_frames)], dim=0
+                    )
 
-            # CLS gets (-1, -1)
-            cls_coord = torch.tensor([[-1, -1]])
+                    # Assemble embeddings from existing projections
+                    video_embeddings = (
+                        key_layer[0]
+                        .permute(1, 0, 2)
+                        .reshape(key_layer.size(2), -1)
+                        .float()
+                    )  # [S, all_head]
+                    text_embeddings = mixed_query_layer[0, valid_tokens].float()
 
-            spatial_coords = (
-                torch.cat([cls_coord, *([grid] * num_frames)], dim=0).float().to(device)
-            )
-            video_embeddings = self.key(encoder_hidden_states).squeeze().float()
-            text_embeddings = mixed_query_layer.squeeze().float()[valid_tokens]
-            Ps = []
-            attn_maps = attention_probs.squeeze().float()
-            for i in range(attn_maps.size(0)):
-                attn_map = attn_maps[i][valid_tokens]
-                C = compute_temporal_spatial_cost_matrix(
-                    text_embeds=text_embeddings,
-                    video_embeds=video_embeddings,
-                    attn_map=attn_map,
-                    frame_indices=frame_indices,
-                    spatial_coords=spatial_coords,
-                    gamma=0.1,
-                    eta=0.2,
-                )
-                P = solve_partial_ot(C, epsilon=0.05, frac_mass=0.9)
-                Ps.append(P)
-            Ps = torch.stack(Ps, dim=0).unsqueeze(0).half() * len(valid_tokens)
+                    attn_maps = attention_probs[0].float()  # [H,S_q,S_k]
+                    plans = []
+                    for h_idx in range(attn_maps.size(0)):
+                        attn_map = attn_maps[h_idx][valid_tokens]
+                        C = compute_temporal_spatial_cost_matrix(
+                            text_embeds=text_embeddings,
+                            video_embeds=video_embeddings,
+                            attn_map=attn_map,
+                            frame_indices=frame_indices,
+                            spatial_coords=spatial_coords,
+                            gamma=0.2,
+                            eta=0.2,
+                        )
 
-            # attention_probs[:, :, valid_tokens] = (
-            #     0.5 * attention_probs[:, :, valid_tokens] + 0.5 * Ps
-            # )
+                        def row_normalize_plan(P, eps=1e-8):
+                            rsum = P.sum(dim=1, keepdim=True).clamp_min(eps)
+                            return P / rsum
 
-            updated_attention_probs = attention_probs.clone()
-            updated_attention_probs[:, :, valid_tokens] = (
-                0.5 * attention_probs[:, :, valid_tokens] + 0.5 * Ps
-            )
-            attention_probs = updated_attention_probs
+                        P_tmp = solve_partial_ot(C, epsilon=0.05, frac_mass=0.9)
+                        P_tmp = row_normalize_plan(P_tmp)
+                        plans.append(P_tmp)
+
+                    Ps = torch.stack(plans, dim=0).unsqueeze(0).half() * len(
+                        valid_tokens
+                    )
+
+                    # Free temporaries early
+                    del (
+                        video_embeddings,
+                        text_embeddings,
+                        attn_maps,
+                        frame_indices,
+                        spatial_coords,
+                        C,
+                        P_tmp,
+                        plans,
+                    )
+                    torch.cuda.empty_cache()
+
+            # Sanity check: skip fusion if plan is not fully finite
+            if Ps is not None:
+                if not torch.isfinite(Ps).all():
+                    Ps = None
+
+            if Ps is not None:
+
+                eps = 1e-6
+                Aqk = attention_probs[:, :, valid_tokens, :]  # [B,H,N,K]
+                Q = Ps[None, None, :, :]  # [1,1,N,K]   (Ps detached)
+
+                attn_dtype = Aqk.dtype
+                A32 = Aqk.to(torch.float32)
+                Q32 = Q.to(torch.float32)
+
+                logA = (A32 + eps).log()
+                logQ = (Q32 + eps).log()
+                log_mix = 1.0 * logA + 1.0 * logQ
+                P_new32 = (log_mix).exp()
+                P_new32 = P_new32 / P_new32.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+
+                if not torch.isfinite(P_new32).all():
+                    P_new = Aqk
+                else:
+                    P_new = P_new32.to(attn_dtype)
+
+                updated_attention_probs = attention_probs.clone()
+                updated_attention_probs[:, :, valid_tokens, :] = P_new
+                attention_probs = updated_attention_probs
+                # --- end merge ---
 
         if is_cross_attention and self.save_attention:
             self.save_attention_map(attention_probs)

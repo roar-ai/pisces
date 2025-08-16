@@ -50,33 +50,33 @@ IP=[MASTER NODE IP]
 
 # If you do not have 32 GPUs and to fit in memory, you can: 1. increase sp_size. 2. reduce num_latent_t
 torchrun --nnodes 1 --nproc_per_node 8 \
-    fastvideo/distill_grpo.py\
+    fastvideo/distill.py\
     --seed 42\
     --pretrained_model_name_or_path $DATA_DIR/hunyuan\
     --dit_model_name_or_path $DATA_DIR/hunyuan/hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt\
     --model_type "hunyuan" \
     --cache_dir "$DATA_DIR/.cache"\
-    --data_json_path "$DATA_DIR/HD-Mixkit-Finetune-Hunyuan/videos2caption.json"\
-    --validation_prompt_dir "$DATA_DIR/HD-Mixkit-Finetune-Hunyuan/validation"\
+    --data_json_path "/media/minhquan/data/HD-Mixkit-Finetune-Hunyuan/videos2caption.json"\
+    --validation_prompt_dir "/media/minhquan/data/HD-Mixkit-Finetune-Hunyuan/validation"\
     --gradient_checkpointing\
     --train_batch_size=1\
     --num_latent_t 8 \
     --sp_size 8 \
     --train_sp_batch_size 1\
     --dataloader_num_workers 4\
-    --gradient_accumulation_steps=4\
-    --max_train_steps=256\
+    --gradient_accumulation_steps=32\
+    --max_train_steps=312\
     --learning_rate=1e-6\
     --mixed_precision="bf16"\
     --checkpointing_steps=64\
     --validation_steps 64\
-    --validation_sampling_steps "8,50" \
+    --validation_sampling_steps "16,50" \
     --checkpoints_total_limit 3\
     --allow_tf32\
     --ema_start_step 0\
     --cfg 0.0\
     --log_validation\
-    --output_dir="$DATA_DIR/outputs/hy_phase1_shift17_bs_16_HD_without_ot_grpo"\
+    --output_dir="$DATA_DIR/outputs/hy_phase1_shift17_bs_16_HD_pot_gradacc32"\
     --tracker_project_name Hunyuan_Distill \
     --num_height 720 \
     --num_width 1280 \

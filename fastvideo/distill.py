@@ -175,15 +175,13 @@ def distill_one_step(
         latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
         images_0 = vae.decode(latents_0, return_dict=False)[0]
         images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
-        image_rewards = image_reward_fn(images_0.squeeze(2), caption)
-        image_loss = -image_rewards.mean() * 0.1 / gradient_accumulation_steps
+        # image_rewards = image_reward_fn(images_0.squeeze(2), caption)
+        # image_loss = -image_rewards.mean() / gradient_accumulation_steps
 
         video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
         global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
-        global_loss = -global_rewards.mean() * 0.1 / gradient_accumulation_steps
-        finegrained_loss = (
-            -finegrained_rewards.mean() * 0.1 / gradient_accumulation_steps
-        )
+        global_loss = -global_rewards.mean() / gradient_accumulation_steps
+        finegrained_loss = -finegrained_rewards.mean() / gradient_accumulation_steps
 
         # if accelerator.is_main_process:
         model_pred, end_index = solver.euler_style_multiphase_pred(
@@ -270,20 +268,20 @@ def distill_one_step(
                 assert NotImplementedError("pred_decay_type is not implemented")
 
         # calculate model_pred norm and mean
-        get_norm(
-            model_pred.detach().float(), model_pred_norm, gradient_accumulation_steps
-        )
-        (distill_loss + image_loss + global_loss + finegrained_loss).backward()
-        # (distill_loss + global_loss + finegrained_loss).backward()
-        # (distill_loss + image_loss).backward()
+        # get_norm(
+        #     model_pred.detach().float(), model_pred_norm, gradient_accumulation_steps
+        # )
+        # (distill_loss + image_loss + global_loss + finegrained_loss).backward()
+        (distill_loss + global_loss + finegrained_loss).backward()
+        # distill_loss.backward()
 
         avg_distill_loss = distill_loss.detach().clone()
         dist.all_reduce(avg_distill_loss, op=dist.ReduceOp.AVG)
         total_distill_loss += avg_distill_loss.item()
 
-        avg_image_loss = image_loss.detach().clone()
-        dist.all_reduce(avg_image_loss, op=dist.ReduceOp.AVG)
-        total_image_loss += avg_image_loss.item()
+        # avg_image_loss = image_loss.detach().clone()
+        # dist.all_reduce(avg_image_loss, op=dist.ReduceOp.AVG)
+        # total_image_loss += avg_image_loss.item()
 
         avg_global_loss = global_loss.detach().clone()
         dist.all_reduce(avg_global_loss, op=dist.ReduceOp.AVG)
@@ -302,8 +300,63 @@ def distill_one_step(
                 p_averaged.copy_(
                     torch.lerp(p_averaged.detach(), p_model.detach(), 1 - ema_decay)
                 )
+    # ---------------- NaN / Inf diagnostics BEFORE clipping -----------------
+    debug_nan = False  # flip to False to disable extra checks
+    if debug_nan:
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        # Check individual loss components
+        for name_, val_ in {
+            "total_distill_loss_step_mean": total_distill_loss
+            / max(1, gradient_accumulation_steps),
+            "total_global_loss_step_mean": total_global_loss
+            / max(1, gradient_accumulation_steps),
+            "total_finegrained_loss_step_mean": total_finegrained_loss
+            / max(1, gradient_accumulation_steps),
+        }.items():
+            if not math.isfinite(val_):
+                if rank == 0:
+                    print(
+                        f"[NaN DEBUG] Non-finite aggregated loss component {name_}: {val_}"
+                    )
+        # Per-parameter grad scan (only rank 0 to avoid spam)
+        if rank == 0:
+            found_bad = False
+            with torch.no_grad():
+                for mod in FSDP.fsdp_modules(transformer):
+                    for name, p in mod.named_parameters(recurse=False):
+                        if p.grad is None:
+                            continue
+                        if torch.isnan(p.grad).any() or torch.isinf(p.grad).any():
+                            found_bad = True
+                            g = p.grad
+                            print(
+                                f"[NaN DEBUG] Detected non-finite grad in param '{name}': shape={g.shape} dtype={g.dtype} max_abs={g.abs().max().item():.3e} min={g.min().item():.3e} max={g.max().item():.3e}"
+                            )
+                            break
+                    if found_bad:
+                        break
+            if found_bad:
+                # Optional: zero bad grads to let training proceed rather than crashing
+                print(
+                    "[NaN DEBUG] Zeroing non-finite gradients to continue (consider investigating upstream)."
+                )
+                for mod in FSDP.fsdp_modules(transformer):
+                    for p in mod.parameters():
+                        if p.grad is not None and (
+                            torch.isnan(p.grad).any() or torch.isinf(p.grad).any()
+                        ):
+                            p.grad = torch.nan_to_num(
+                                p.grad, nan=0.0, posinf=0.0, neginf=0.0
+                            )
+    # ------------------------------------------------------------------------
 
     grad_norm = transformer.clip_grad_norm_(max_grad_norm)
+    if debug_nan and (not math.isfinite(grad_norm)):  # Re-check after clipping
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        if rank == 0:
+            print(
+                "[NaN DEBUG] grad_norm became non-finite AFTER clipping. Investigate earlier prints."
+            )
     optimizer.step()
     lr_scheduler.step()
 
@@ -364,10 +417,10 @@ def main(args):
 
     image_reward_fn = get_reward_fn("hpsv2", precision="fp16")
     video_reward_fn = get_reward_fn(
-        "vi_clip2",
+        "vi_clip2_OT",
         precision="fp16",
         rm_ckpt_dir="/mnt/iftekhar/minhquan-local/InternVideo2-Stage2_1B-224p-f4/InternVideo2-stage2_1b-224p-f4.pt",
-        # OT_map_ckpt_dir="/media/minhquan/hummingbird-video/OT_maps_v1/OT_map_156000.pt",
+        OT_map_ckpt_dir="/media/minhquan/hummingbird-video/OT_maps_v1/OT_map_156000.pt",
         n_frames=8,
     )
     if args.use_ema:
@@ -648,9 +701,9 @@ def main(args):
             wandb.log(
                 {
                     "distill_loss": distill_loss,
-                    "image_reward": -1.0 * image_loss / 0.1,
-                    "global_reward": -1.0 * global_loss / 0.1,
-                    "finegrained_reward": -1.0 * finegrained_loss / 0.1,
+                    "image_reward": -1.0 * image_loss,
+                    "global_reward": -1.0 * global_loss,
+                    "finegrained_reward": -1.0 * finegrained_loss,
                     "learning_rate": lr_scheduler.get_last_lr()[0],
                     "step_time": step_time,
                     "avg_step_time": avg_step_time,

@@ -355,7 +355,7 @@ def get_intern_vid2_OT_score_fn(
                 text_inputs,
                 padding="max_length",
                 truncation=True,
-                max_length=40,
+                max_length=300,
                 return_tensors="pt",
             ).to(device)
             # _, text_features = vi_clip.encode_text(text)
