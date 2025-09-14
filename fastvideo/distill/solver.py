@@ -246,8 +246,8 @@ class EulerSolver:
         self.step_ratio = timesteps // euler_timesteps
         self.euler_timesteps = (
             np.arange(1, euler_timesteps + 1) * self.step_ratio
-        ).round().astype(np.int64) - 1
-        self.euler_timesteps_prev = np.asarray([0] + self.euler_timesteps[:-1].tolist())
+        ).round().astype(np.int64) - 1 # e.g. [19, 39, 59, ..., 999]
+        self.euler_timesteps_prev = np.asarray([0] + self.euler_timesteps[:-1].tolist()) # e.g. [0, 19, 39, ..., 979]
         self.sigmas = sigmas[self.euler_timesteps]
         self.sigmas_prev = np.asarray(
             [sigmas[0]] + sigmas[self.euler_timesteps[:-1]].tolist()

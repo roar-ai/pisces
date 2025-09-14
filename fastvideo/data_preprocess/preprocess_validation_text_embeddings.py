@@ -45,7 +45,8 @@ def main(args):
             with torch.autocast("cuda", dtype=autocast_type):
                 prompt_embeds, prompt_attention_mask = text_encoder.encode_prompt(
                     prompt)
-                file_name = prompt.split(".")[0]
+                # file_name = prompt.split(".")[0]
+                file_name = prompt[:50]
                 prompt_embed_path = os.path.join(args.output_dir, "validation",
                                                  "prompt_embed",
                                                  f"{file_name}.pt")

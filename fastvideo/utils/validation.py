@@ -287,7 +287,7 @@ def log_validation(
                     256, 4096).to(device).unsqueeze(0)
                 negative_prompt_attention_mask = (
                     torch.zeros(256).bool().to(device).unsqueeze(0))
-                generator = torch.Generator(device="cpu").manual_seed(12345)
+                generator = torch.Generator(device="cpu").manual_seed(1024)
                 video = sample_validation_video(
                     args.model_type,
                     transformer,

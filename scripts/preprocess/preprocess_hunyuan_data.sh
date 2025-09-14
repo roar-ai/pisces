@@ -3,8 +3,8 @@ GPU_NUM=1 # 2,4,8
 MODEL_PATH="data/hunyuan"
 MODEL_TYPE="hunyuan"
 DATA_MERGE_PATH="data/Image-Vid-Finetune-Src/merge.txt"
-OUTPUT_DIR="data/Image-Vid-Finetune-HunYuan-ChatGPT-Prompts"
-VALIDATION_PATH="assets/prompt.txt"
+OUTPUT_DIR="data/Image-Vid-Finetune-HunYuan-MovieGenBench-Prompts"
+VALIDATION_PATH="assets/prompt-moviegenbench.txt"
 
 # torchrun --nproc_per_node=$GPU_NUM \
 #     fastvideo/data_preprocess/preprocess_vae_latents.py \

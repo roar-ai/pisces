@@ -81,6 +81,53 @@ def get_norm(model_pred, norms, gradient_accumulation_steps):
     norms["absolute mean"] += absolute_mean.item()
     norms["absolute max"] += absolute_max.item()
 
+def flux_step(
+    model_output: torch.Tensor,
+    latents: torch.Tensor,
+    eta: float,
+    sigmas: torch.Tensor,
+    prev_sigmas: torch.Tensor,
+    index: int,
+    prev_sample: torch.Tensor,
+    grpo: bool,
+    sde_solver: bool,
+):
+    sigma = sigmas[index]
+    dsigma = prev_sigmas[index] - sigma
+    prev_sample_mean = latents + dsigma * model_output
+
+    pred_original_sample = latents - sigma * model_output
+
+    delta_t = sigma - prev_sigmas[index]
+
+    std_dev_t = eta * math.sqrt(delta_t)
+
+    if sde_solver:
+        score_estimate = -(latents - pred_original_sample * (1 - sigma)) / sigma**2
+        log_term = -0.5 * eta**2 * score_estimate
+        prev_sample_mean = prev_sample_mean + log_term * dsigma
+
+    if grpo and prev_sample is None:
+        prev_sample = prev_sample_mean + torch.randn_like(prev_sample_mean) * std_dev_t
+
+    if grpo:
+        # log prob of prev_sample given prev_sample_mean and std_dev_t
+        log_prob = -(
+            (
+                prev_sample.detach().to(torch.float32)
+                - prev_sample_mean.to(torch.float32)
+            )
+            ** 2
+        ) / (2 * (std_dev_t**2))
+        -math.log(std_dev_t) - torch.log(torch.sqrt(2 * torch.as_tensor(math.pi)))
+
+        # mean along all but batch dimension
+        log_prob = log_prob.mean(dim=tuple(range(1, log_prob.ndim)))
+        return prev_sample, pred_original_sample, log_prob
+    else:
+        return prev_sample_mean, pred_original_sample
+
+
 
 def distill_one_step(
     transformer,
@@ -111,7 +158,7 @@ def distill_one_step(
     hunyuan_teacher_disable_cfg,
     group_size=16,
     distill_weight=1.0,
-    reward_weight=0.1,
+    reward_weight=1.0,
 ):
     total_distill_loss = 0.0
     total_image_loss = 0.0
@@ -139,213 +186,111 @@ def distill_one_step(
             caption,
         ) = next(loader)
 
-    #     model_input = normalize_dit_input(model_type, latents)
-    #     noise = torch.randn_like(model_input)
-    #     bsz = model_input.shape[0]
-    #     index = torch.randint(
-    #         0, num_euler_timesteps, (bsz,), device=model_input.device
-    #     ).long()
-    #     if sp_size > 1:
-    #         broadcast(index)
-    #     # Add noise according to flow matching.
-    #     # sigmas = get_sigmas(start_timesteps, n_dim=model_input.ndim, dtype=model_input.dtype)
-    #     sigmas = extract_into_tensor(solver.sigmas, index, model_input.shape)
-    #     sigmas_prev = extract_into_tensor(solver.sigmas_prev, index, model_input.shape)
 
-    #     timesteps = (sigmas * noise_scheduler.config.num_train_timesteps).view(-1)
-    #     # if squeeze to [], unsqueeze to [1]
 
-    #     timesteps_prev = (
-    #         sigmas_prev * noise_scheduler.config.num_train_timesteps
-    #     ).view(-1)
-    #     noisy_model_input = sigmas * noise + (1.0 - sigmas) * model_input
-    #     # Predict the noise residual
-    #     with torch.autocast("cuda", dtype=torch.bfloat16):
-    #         teacher_kwargs = {
-    #             "hidden_states": noisy_model_input,
-    #             "encoder_hidden_states": encoder_hidden_states,
-    #             "timestep": timesteps,
-    #             "encoder_attention_mask": encoder_attention_mask,  # B, L
-    #             "return_dict": False,
-    #         }
-    #         if hunyuan_teacher_disable_cfg:
-    #             teacher_kwargs["guidance"] = torch.tensor(
-    #                 [1000.0], device=noisy_model_input.device, dtype=torch.bfloat16
-    #             )
-    #         model_pred = transformer(**teacher_kwargs)[0]
+        # === PASS 1: Forward passes with no_grad to get all rewards ===
+        group_image_rewards = []
+        group_global_rewards = []
+        group_finegrained_rewards = []
+        group_noises = []
+        group_log_probs = []
+        group_latents = []
 
-    #     # rank = int(os.getenv("RANK", 0))
-    #     # print(f"{rank}_{index}")
-    #     model_pred_0, end_index_0 = solver.euler_style_multiphase_pred_last_step(
-    #         noisy_model_input, model_pred, index, multiphase
-    #     )
+        with torch.no_grad():  # Disable gradients for this entire pass
+            for i in range(group_size):
+                model_input = normalize_dit_input(model_type, latents)
+                # Generate and store unique noise for each sample
+                noise = torch.randn_like(model_input)
+                group_noises.append(noise)
 
-    #     latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
-    #     images_0 = vae.decode(latents_0, return_dict=False)[0]
-    #     images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
-    #     image_rewards = image_reward_fn(images_0.squeeze(2), caption)
-    #     image_loss = -image_rewards.mean() * 0.1 / gradient_accumulation_steps
+                # --- Perform a single forward pass (copied from your original code) ---
+                bsz = model_input.shape[0]
+                index = torch.randint(
+                    0, num_euler_timesteps, (bsz,), device=model_input.device
+                ).long()
+                if sp_size > 1:
+                    broadcast(index)
+                sigmas = extract_into_tensor(solver.sigmas, index, model_input.shape)
+                sigmas_prev = extract_into_tensor(
+                    solver.sigmas_prev, index, model_input.shape
+                )
+                timesteps = (sigmas * noise_scheduler.config.num_train_timesteps).view(-1)
+                timesteps_prev = (
+                    sigmas_prev * noise_scheduler.config.num_train_timesteps
+                ).view(-1)
+                noisy_model_input = sigmas * noise + (1.0 - sigmas) * model_input
+        
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    teacher_kwargs = {
+                        "hidden_states": noisy_model_input,
+                        "encoder_hidden_states": encoder_hidden_states,
+                        "timestep": timesteps,
+                        "encoder_attention_mask": encoder_attention_mask,  # B, L
+                        "return_dict": False,
+                    }
+                    if hunyuan_teacher_disable_cfg:
+                        teacher_kwargs["guidance"] = torch.tensor(
+                            [1000.0], device=noisy_model_input.device, dtype=torch.bfloat16
+                        )
+                    model_pred = transformer(**teacher_kwargs)[0]
 
-    #     video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
-    #     if dist.get_rank() == 0:
-    #         print(
-    #             f"latent size: {latents_0.size()}, image size: {images_0.size()}, video size: {video_0.size()}"
-    #         )
-    #     global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
-    #     global_loss = -global_rewards.mean() * 0.1 / gradient_accumulation_steps
-    #     finegrained_loss = (
-    #         -finegrained_rewards.mean() * 0.1 / gradient_accumulation_steps
-    #     )
+                z, pred_original, log_prob = flux_step(
+                    model_pred,
+                    noisy_model_input,
+                    eta=0.25,
+                    sigmas=solver.sigmas,
+                    prev_sigmas=solver.sigmas_prev,
+                    index=index,
+                    prev_sample=None,
+                    grpo=True,
+                    sde_solver=True,
+                )            
 
-    #     # if accelerator.is_main_process:
-    #     model_pred, end_index = solver.euler_style_multiphase_pred(
-    #         noisy_model_input, model_pred, index, multiphase
-    #     )
+                model_pred_0, _ = solver.euler_style_multiphase_pred_last_step(
+                    noisy_model_input, model_pred, index, multiphase
+                )
+                latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
+                images_0 = vae.decode(latents_0, return_dict=False)[0]
+                images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
+                image_rewards = image_reward_fn(images_0.squeeze(2), caption)
 
-    #     with torch.no_grad():
-    #         w = distill_cfg
-    #         with torch.autocast("cuda", dtype=torch.bfloat16):
-    #             cond_teacher_output = teacher_transformer(
-    #                 noisy_model_input,
-    #                 encoder_hidden_states,
-    #                 timesteps,
-    #                 encoder_attention_mask,  # B, L
-    #                 return_dict=False,
-    #             )[0].float()
-    #         if not_apply_cfg_solver:
-    #             uncond_teacher_output = cond_teacher_output
-    #         else:
-    #             # Get teacher model prediction on noisy_latents and unconditional embedding
-    #             with torch.autocast("cuda", dtype=torch.bfloat16):
-    #                 uncond_teacher_output = teacher_transformer(
-    #                     noisy_model_input,
-    #                     uncond_prompt_embed.unsqueeze(0).expand(bsz, -1, -1),
-    #                     timesteps,
-    #                     uncond_prompt_mask.unsqueeze(0).expand(bsz, -1),
-    #                     return_dict=False,
-    #                 )[0].float()
-    #         teacher_output = cond_teacher_output + w * (
-    #             cond_teacher_output - uncond_teacher_output
-    #         )
-    #         x_prev = solver.euler_step(noisy_model_input, teacher_output, index)
+                video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
+                global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
 
-    #     # 20.4.12. Get target LCM prediction on x_prev, w, c, t_n
-    #     with torch.no_grad():
-    #         with torch.autocast("cuda", dtype=torch.bfloat16):
-    #             if ema_transformer is not None:
-    #                 target_pred = ema_transformer(
-    #                     x_prev.float(),
-    #                     encoder_hidden_states,
-    #                     timesteps_prev,
-    #                     encoder_attention_mask,  # B, L
-    #                     return_dict=False,
-    #                 )[0]
-    #             else:
-    #                 target_pred = transformer(
-    #                     x_prev.float(),
-    #                     encoder_hidden_states,
-    #                     timesteps_prev,
-    #                     encoder_attention_mask,  # B, L
-    #                     return_dict=False,
-    #                 )[0]
+                group_image_rewards.append(image_rewards.mean())
+                group_global_rewards.append(global_rewards.mean())
+                group_finegrained_rewards.append(finegrained_rewards.mean())
+                group_log_probs.append(log_prob)
 
-    #         target, end_index = solver.euler_style_multiphase_pred(
-    #             x_prev, target_pred, index, multiphase, True
-    #         )
+                group_latents.append(torch.stack([noisy_model_input, z], dim=2)) # [1, 16, 2, 98, 160]
 
-    #     huber_c = 0.001
-    #     # loss = loss.mean()
-    #     distill_loss = (
-    #         torch.mean(
-    #             torch.sqrt((model_pred.float() - target.float()) ** 2 + huber_c**2)
-    #             - huber_c
-    #         )
-    #         / gradient_accumulation_steps
-    #     )
-    #     if pred_decay_weight > 0:
-    #         if pred_decay_type == "l1":
-    #             pred_decay_loss = (
-    #                 torch.mean(torch.sqrt(model_pred.float() ** 2))
-    #                 * pred_decay_weight
-    #                 / gradient_accumulation_steps
-    #             )
-    #             loss += pred_decay_loss
-    #         elif pred_decay_type == "l2":
-    #             # essnetially k2?
-    #             pred_decay_loss = (
-    #                 torch.mean(model_pred.float() ** 2)
-    #                 * pred_decay_weight
-    #                 / gradient_accumulation_steps
-    #             )
-    #             loss += pred_decay_loss
-    #         else:
-    #             assert NotImplementedError("pred_decay_type is not implemented")
 
-    #     # calculate model_pred norm and mean
-    #     get_norm(
-    #         model_pred.detach().float(), model_pred_norm, gradient_accumulation_steps
-    #     )
-    #     (distill_loss + image_loss + global_loss + finegrained_loss).backward()
-    #     # (distill_loss + global_loss + finegrained_loss).backward()
-    #     # (distill_loss + image_loss).backward()
+                # (batch_size, num_steps + 1, 4, 64, 64)
 
-    #     avg_distill_loss = distill_loss.detach().clone()
-    #     dist.all_reduce(avg_distill_loss, op=dist.ReduceOp.AVG)
-    #     total_distill_loss += avg_distill_loss.item()
 
-    #     avg_image_loss = image_loss.detach().clone()
-    #     dist.all_reduce(avg_image_loss, op=dist.ReduceOp.AVG)
-    #     total_image_loss += avg_image_loss.item()
+        # === Post-Pass 1: Calculate normalization constants ===
+        image_rewards_tensor = torch.stack(group_image_rewards)
+        global_rewards_tensor = torch.stack(group_global_rewards)
+        finegrained_rewards_tensor = torch.stack(group_finegrained_rewards)
+        group_latents_tensor = torch.stack(group_latents, dim = 0).squeeze(1) # (batch_size, 1+1, 4, 64, 64)
+        group_log_probs_tensor = torch.stack(group_log_probs, dim = 0)
 
-    #     avg_global_loss = global_loss.detach().clone()
-    #     dist.all_reduce(avg_global_loss, op=dist.ReduceOp.AVG)
-    #     total_global_loss += avg_global_loss.item()
+        image_reward_mean = image_rewards_tensor.mean()
+        image_reward_std = image_rewards_tensor.std() + 1e-6
+        global_reward_mean = global_rewards_tensor.mean()
+        global_reward_std = global_rewards_tensor.std() + 1e-6
+        finegrained_reward_mean = finegrained_rewards_tensor.mean()
+        finegrained_reward_std = finegrained_rewards_tensor.std() + 1e-6
+        # normalized_rewards = (rewards_tensor - reward_mean) / (reward_std + 1e-8)
 
-    #     avg_finegrained_loss = finegrained_loss.detach().clone()
-    #     dist.all_reduce(avg_finegrained_loss, op=dist.ReduceOp.AVG)
-    #     total_finegrained_loss += avg_finegrained_loss.item()
-    # # update ema
-    # if ema_transformer is not None:
-    #     reshard_fsdp(ema_transformer)
-    #     for p_averaged, p_model in zip(
-    #         ema_transformer.parameters(), transformer.parameters()
-    #     ):
-    #         with torch.no_grad():
-    #             p_averaged.copy_(
-    #                 torch.lerp(p_averaged.detach(), p_model.detach(), 1 - ema_decay)
-    #             )
-    # --- GRPO with Manual Gradient Accumulation ---
-
-    # === PASS 1: Forward passes with no_grad to get all rewards ===
-    group_image_rewards = []
-    group_global_rewards = []
-    group_finegrained_rewards = []
-    group_noises = []
-
-    with torch.no_grad():  # Disable gradients for this entire pass
+        dist.barrier()
+        # === PASS 2: Re-run passes one-by-one to calculate losses and backpropagate ===
         for i in range(group_size):
-            model_input = normalize_dit_input(model_type, latents)
-            # Generate and store unique noise for each sample
-            noise = torch.randn_like(model_input)
-            group_noises.append(noise)
 
-            # --- Perform a single forward pass (copied from your original code) ---
-            bsz = model_input.shape[0]
-            index = torch.randint(
-                0, num_euler_timesteps, (bsz,), device=model_input.device
-            ).long()
-            if sp_size > 1:
-                broadcast(index)
-            sigmas = extract_into_tensor(solver.sigmas, index, model_input.shape)
-            sigmas_prev = extract_into_tensor(
-                solver.sigmas_prev, index, model_input.shape
-            )
-            timesteps = (sigmas * noise_scheduler.config.num_train_timesteps).view(-1)
-            timesteps_prev = (
-                sigmas_prev * noise_scheduler.config.num_train_timesteps
-            ).view(-1)
-            noisy_model_input = sigmas * noise + (1.0 - sigmas) * model_input
+            noisy_model_input, z = group_latents_tensor[i, :, 0].unsqueeze(0), group_latents_tensor[i, :, 1].unsqueeze(0) # (batch_size, 4, 64, 64)
 
+            # --- 1. Calculate Distillation Loss for this sample ---
+            # Student prediction
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 teacher_kwargs = {
                     "hidden_states": noisy_model_input,
@@ -358,217 +303,148 @@ def distill_one_step(
                     teacher_kwargs["guidance"] = torch.tensor(
                         [1000.0], device=noisy_model_input.device, dtype=torch.bfloat16
                     )
-                model_pred = transformer(**teacher_kwargs)[0]
+                model_pred_student = transformer(**teacher_kwargs)[0]
 
-            model_pred_0, _ = solver.euler_style_multiphase_pred_last_step(
-                noisy_model_input, model_pred, index, multiphase
+
+            model_pred, _ = solver.euler_style_multiphase_pred(
+                noisy_model_input, model_pred_student, index, multiphase
             )
-            latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
-            images_0 = vae.decode(latents_0, return_dict=False)[0]
-            images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
-            image_rewards = image_reward_fn(images_0.squeeze(2), caption)
 
-            video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
-            global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
-
-            # combined_reward = (
-            #     image_rewards.mean()
-            #     + global_rewards.mean()
-            #     + finegrained_rewards.mean()
-            # )
-            group_image_rewards.append(image_rewards.mean())
-            group_global_rewards.append(global_rewards.mean())
-            group_finegrained_rewards.append(finegrained_rewards.mean())
-
-    # === Post-Pass 1: Calculate normalization constants ===
-    image_rewards_tensor = torch.stack(group_image_rewards)
-    global_rewards_tensor = torch.stack(group_global_rewards)
-    finegrained_rewards_tensor = torch.stack(group_finegrained_rewards)
-
-    image_reward_mean = image_rewards_tensor.mean()
-    image_reward_std = image_rewards_tensor.std()
-    global_reward_mean = global_rewards_tensor.mean()
-    global_reward_std = global_rewards_tensor.std()
-    finegrained_reward_mean = finegrained_rewards_tensor.mean()
-    finegrained_reward_std = finegrained_rewards_tensor.std()
-    # normalized_rewards = (rewards_tensor - reward_mean) / (reward_std + 1e-8)
-
-    # === PASS 2: Re-run passes one-by-one to calculate losses and backpropagate ===
-    for i in range(group_size):
-        noise = group_noises[i]  # Use the saved noise for reproducibility
-        model_input = normalize_dit_input(model_type, latents)
-
-        # Re-run the forward pass for THIS sample with gradients enabled
-        bsz = model_input.shape[0]
-        index = torch.randint(
-            0, num_euler_timesteps, (bsz,), device=model_input.device
-        ).long()
-        if sp_size > 1:
-            broadcast(index)
-        sigmas = extract_into_tensor(solver.sigmas, index, model_input.shape)
-        sigmas_prev = extract_into_tensor(solver.sigmas_prev, index, model_input.shape)
-        noisy_model_input = sigmas * noise + (1.0 - sigmas) * model_input
-        timesteps = (sigmas * noise_scheduler.config.num_train_timesteps).view(-1)
-        timesteps_prev = (
-            sigmas_prev * noise_scheduler.config.num_train_timesteps
-        ).view(-1)
-
-        # --- 1. Calculate Distillation Loss for this sample ---
-        # Student prediction
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            teacher_kwargs = {
-                "hidden_states": noisy_model_input,
-                "encoder_hidden_states": encoder_hidden_states,
-                "timestep": timesteps,
-                "encoder_attention_mask": encoder_attention_mask,  # B, L
-                "return_dict": False,
-            }
-            if hunyuan_teacher_disable_cfg:
-                teacher_kwargs["guidance"] = torch.tensor(
-                    [1000.0], device=noisy_model_input.device, dtype=torch.bfloat16
-                )
-            model_pred = transformer(**teacher_kwargs)[0]
-
-        model_pred_0, end_index_0 = solver.euler_style_multiphase_pred_last_step(
-            noisy_model_input, model_pred, index, multiphase
-        )
-
-        latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
-        images_0 = vae.decode(latents_0, return_dict=False)[0]
-        images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
-        image_rewards = image_reward_fn(images_0.squeeze(2), caption)
-        # image_loss = -image_rewards.mean() * 0.1 / gradient_accumulation_steps
-
-        video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
-        global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
-        # global_loss = -global_rewards.mean() * 0.1 / gradient_accumulation_steps
-        # finegrained_loss = (
-        #     -finegrained_rewards.mean() * 0.1 / gradient_accumulation_steps
-        # )
-        image_rewards = (image_rewards.mean() - image_reward_mean) / (
-            image_reward_std + 1e-8
-        )
-        global_rewards = (global_rewards.mean() - global_reward_mean) / (
-            global_reward_std + 1e-8
-        )
-        finegrained_rewards = (finegrained_rewards.mean() - finegrained_reward_mean) / (
-            finegrained_reward_std + 1e-8
-        )
-        image_loss = -image_rewards.mean()
-        global_loss = -global_rewards.mean()
-        finegrained_loss = -finegrained_rewards.mean()
-        model_pred, _ = solver.euler_style_multiphase_pred(
-            noisy_model_input, model_pred, index, multiphase
-        )
-
-        # Teacher prediction (target)
-        with torch.no_grad():
-            w = distill_cfg
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                cond_teacher_output = teacher_transformer(
-                    noisy_model_input,
-                    encoder_hidden_states,
-                    timesteps,
-                    encoder_attention_mask,  # B, L
-                    return_dict=False,
-                )[0].float()
-            if not_apply_cfg_solver:
-                uncond_teacher_output = cond_teacher_output
-            else:
-                # Get teacher model prediction on noisy_latents and unconditional embedding
+            # Teacher prediction (target)
+            with torch.no_grad():
+                w = distill_cfg
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    uncond_teacher_output = teacher_transformer(
+                    cond_teacher_output = teacher_transformer(
                         noisy_model_input,
-                        uncond_prompt_embed.unsqueeze(0).expand(bsz, -1, -1),
+                        encoder_hidden_states,
                         timesteps,
-                        uncond_prompt_mask.unsqueeze(0).expand(bsz, -1),
+                        encoder_attention_mask,  # B, L
                         return_dict=False,
                     )[0].float()
-            teacher_output = cond_teacher_output + w * (
-                cond_teacher_output - uncond_teacher_output
-            )
-            x_prev = solver.euler_step(noisy_model_input, teacher_output, index)
-
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                if ema_transformer is not None:
-                    target_pred = ema_transformer(
-                        x_prev.float(),
-                        encoder_hidden_states,
-                        timesteps_prev,
-                        encoder_attention_mask,  # B, L
-                        return_dict=False,
-                    )[0]
+                if not_apply_cfg_solver:
+                    uncond_teacher_output = cond_teacher_output
                 else:
-                    target_pred = transformer(
-                        x_prev.float(),
-                        encoder_hidden_states,
-                        timesteps_prev,
-                        encoder_attention_mask,  # B, L
-                        return_dict=False,
-                    )[0]
+                    # Get teacher model prediction on noisy_latents and unconditional embedding
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        uncond_teacher_output = teacher_transformer(
+                            noisy_model_input,
+                            uncond_prompt_embed.unsqueeze(0).expand(bsz, -1, -1),
+                            timesteps,
+                            uncond_prompt_mask.unsqueeze(0).expand(bsz, -1),
+                            return_dict=False,
+                        )[0].float()
+                teacher_output = cond_teacher_output + w * (
+                    cond_teacher_output - uncond_teacher_output
+                )
+                x_prev = solver.euler_step(noisy_model_input, teacher_output, index)
 
-            target, end_index = solver.euler_style_multiphase_pred(
-                x_prev, target_pred, index, multiphase, True
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    if ema_transformer is not None:
+                        target_pred = ema_transformer(
+                            x_prev.float(),
+                            encoder_hidden_states,
+                            timesteps_prev,
+                            encoder_attention_mask,  # B, L
+                            return_dict=False,
+                        )[0]
+                    else:
+                        target_pred = transformer(
+                            x_prev.float(),
+                            encoder_hidden_states,
+                            timesteps_prev,
+                            encoder_attention_mask,  # B, L
+                            return_dict=False,
+                        )[0]
+
+                target, end_index = solver.euler_style_multiphase_pred(
+                    x_prev, target_pred, index, multiphase, True
+                )
+
+            huber_c = 0.001
+            distill_loss = torch.mean(
+                torch.sqrt((model_pred.float() - target.float()) ** 2 + huber_c**2)
+                - huber_c
+            )
+            global_advantages = (global_rewards_tensor[i] - global_reward_mean) / (global_reward_std)
+            finegrained_advantages = (finegrained_rewards_tensor[i] - finegrained_reward_mean) / (finegrained_reward_std)
+            image_advantages = (image_rewards_tensor[i] - image_reward_mean) / (image_reward_std)
+            
+            clip_range = 1e-4
+            adv_clip_max = 5.0
+
+            _, _, new_log_prob = flux_step(
+                model_pred_student,
+                noisy_model_input,
+                eta=0.25,
+                sigmas=solver.sigmas,
+                prev_sigmas=solver.sigmas_prev,
+                index=index,
+                prev_sample=z,
+                grpo=True,
+                sde_solver=True,
+            )
+            ratio = torch.exp(new_log_prob - group_log_probs_tensor[i])
+            global_advantages = torch.clamp(global_advantages, -adv_clip_max, adv_clip_max)
+            global_unclipped_loss = -global_advantages * ratio
+            global_clipped_loss = -global_advantages * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
+            global_loss = torch.mean(torch.maximum(global_unclipped_loss, global_clipped_loss))
+
+            finegrained_advantages = torch.clamp(finegrained_advantages, -adv_clip_max, adv_clip_max)
+            finegrained_unclipped_loss = -finegrained_advantages * ratio
+            finegrained_clipped_loss = -finegrained_advantages * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
+            finegrained_loss = torch.mean(torch.maximum(finegrained_unclipped_loss, finegrained_clipped_loss))
+
+            image_advantages = torch.clamp(image_advantages, -adv_clip_max, adv_clip_max)
+            image_unclipped_loss = -image_advantages * ratio
+            image_clipped_loss = -image_advantages * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
+            image_loss = torch.mean(torch.maximum(image_unclipped_loss, image_clipped_loss))
+
+
+            total_loss_for_sample = distill_weight * distill_loss + reward_weight * (
+                image_loss + global_loss + finegrained_loss
             )
 
-        huber_c = 0.001
-        distill_loss = torch.mean(
-            torch.sqrt((model_pred.float() - target.float()) ** 2 + huber_c**2)
-            - huber_c
+            # Scale for group size and gradient accumulation
+            scaled_loss = total_loss_for_sample / (group_size * gradient_accumulation_steps)
+            scaled_loss.backward()
+
+            # For logging purposes
+            total_distill_loss_log += distill_loss.item()
+            total_image_loss_log += image_loss.item()
+            total_global_loss_log += global_loss.item()
+            total_finegrained_loss_log += finegrained_loss.item()
+
+            dist.barrier()
+
+        avg_distill_loss = total_distill_loss_log / (
+            group_size * gradient_accumulation_steps
         )
+        total_distill_loss += avg_distill_loss
 
-        # (
-        #     distill_weight * distill_loss
-        #     + reward_weight * (image_loss + global_loss + finegrained_loss)
-        # ).backward()
+        avg_image_loss = total_image_loss_log / (group_size * gradient_accumulation_steps)
+        total_image_loss += avg_image_loss
 
-        # --- 2. Calculate GRPO Loss for this sample ---
-        # reward_loss = -normalized_rewards[i]
+        avg_global_loss = total_global_loss_log / (group_size * gradient_accumulation_steps)
+        total_global_loss += avg_global_loss
 
-        # --- 3. Combine, scale, and backpropagate ---
-        total_loss_for_sample = distill_weight * distill_loss + reward_weight * (
-            image_loss + global_loss + finegrained_loss
+        avg_finegrained_loss = total_finegrained_loss_log / (
+            group_size * gradient_accumulation_steps
         )
+        total_finegrained_loss += avg_finegrained_loss
 
-        # Scale for group size and gradient accumulation
-        scaled_loss = total_loss_for_sample / (group_size * gradient_accumulation_steps)
-        scaled_loss.backward()
+        # --- End of Manual Gradient Accumulation ---
 
-        # For logging purposes
-        total_distill_loss_log += distill_loss.item()
-        total_image_loss_log += image_loss.item()
-        total_global_loss_log += global_loss.item()
-        total_finegrained_loss_log += finegrained_loss.item()
+        if ema_transformer is not None:
+            reshard_fsdp(ema_transformer)
+            for p_averaged, p_model in zip(
+                ema_transformer.parameters(), transformer.parameters()
+            ):
+                with torch.no_grad():
+                    p_averaged.copy_(
+                        torch.lerp(p_averaged.detach(), p_model.detach(), 1 - ema_decay)
+                    )
 
-    # After all accumulation steps, clip gradients and step the optimizer
-    # (The average losses for logging are calculated before the optimizer step)
-    avg_distill_loss = total_distill_loss_log / (
-        group_size * gradient_accumulation_steps
-    )
-    total_distill_loss += avg_distill_loss
-
-    avg_image_loss = total_image_loss_log / (group_size * gradient_accumulation_steps)
-    total_image_loss += avg_image_loss
-
-    avg_global_loss = total_global_loss_log / (group_size * gradient_accumulation_steps)
-    total_global_loss += avg_global_loss
-
-    avg_finegrained_loss = total_finegrained_loss_log / (
-        group_size * gradient_accumulation_steps
-    )
-    total_finegrained_loss += avg_finegrained_loss
-
-    # --- End of Manual Gradient Accumulation ---
-
-    if ema_transformer is not None:
-        reshard_fsdp(ema_transformer)
-        for p_averaged, p_model in zip(
-            ema_transformer.parameters(), transformer.parameters()
-        ):
-            with torch.no_grad():
-                p_averaged.copy_(
-                    torch.lerp(p_averaged.detach(), p_model.detach(), 1 - ema_decay)
-                )
+        dist.barrier()
 
     grad_norm = transformer.clip_grad_norm_(max_grad_norm)
     optimizer.step()
@@ -631,10 +507,10 @@ def main(args):
 
     image_reward_fn = get_reward_fn("hpsv2", precision="fp16")
     video_reward_fn = get_reward_fn(
-        "vi_clip2",
+        "vi_clip2_OT",
         precision="fp16",
         rm_ckpt_dir="/mnt/iftekhar/minhquan-local/InternVideo2-Stage2_1B-224p-f4/InternVideo2-stage2_1b-224p-f4.pt",
-        # OT_map_ckpt_dir="/media/minhquan/hummingbird-video/OT_maps_v1/OT_map_156000.pt",
+        OT_map_ckpt_dir="/media/minhquan/hummingbird-video/OT_maps_v1/OT_map_156000.pt",
         n_frames=8,
     )
     if args.use_ema:
@@ -916,9 +792,9 @@ def main(args):
             wandb.log(
                 {
                     "distill_loss": distill_loss,
-                    "image_reward": -1.0 * image_loss / 0.1,
-                    "global_reward": -1.0 * global_loss / 0.1,
-                    "finegrained_reward": -1.0 * finegrained_loss / 0.1,
+                    "image_reward": -1.0 * image_loss,
+                    "global_reward": -1.0 * global_loss,
+                    "finegrained_reward": -1.0 * finegrained_loss,
                     "learning_rate": lr_scheduler.get_last_lr()[0],
                     "step_time": step_time,
                     "avg_step_time": avg_step_time,

@@ -53,7 +53,7 @@ def main(args):
 
     for prompt in prompts:
         prompt = prompt.replace("\n", "")
-        for seed_int in [1024]:
+        for seed_int in range(50):
             outputs = hunyuan_video_sampler.predict(
                 prompt=prompt,
                 height=args.height,

@@ -57,7 +57,7 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     --model_type "hunyuan" \
     --cache_dir "$DATA_DIR/.cache"\
     --data_json_path "/media/minhquan/data/HD-Mixkit-Finetune-Hunyuan/videos2caption.json"\
-    --validation_prompt_dir "/media/minhquan/data/HD-Mixkit-Finetune-Hunyuan/validation"\
+    --validation_prompt_dir "data/Image-Vid-Finetune-HunYuan-MovieGenBench-Prompts/validation"\
     --gradient_checkpointing\
     --train_batch_size=1\
     --num_latent_t 8 \
@@ -65,18 +65,18 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     --train_sp_batch_size 1\
     --dataloader_num_workers 4\
     --gradient_accumulation_steps=32\
-    --max_train_steps=312\
+    --max_train_steps=256\
     --learning_rate=1e-6\
     --mixed_precision="bf16"\
     --checkpointing_steps=64\
     --validation_steps 64\
     --validation_sampling_steps "16,50" \
-    --checkpoints_total_limit 3\
+    --checkpoints_total_limit 4\
     --allow_tf32\
     --ema_start_step 0\
     --cfg 0.0\
     --log_validation\
-    --output_dir="$DATA_DIR/outputs/hy_phase1_shift17_bs_16_HD_pot_gradacc32"\
+    --output_dir="$DATA_DIR/outputs/hy_pot_gradacc32_lowlr"\
     --tracker_project_name Hunyuan_Distill \
     --num_height 720 \
     --num_width 1280 \
