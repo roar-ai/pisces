@@ -197,27 +197,27 @@ def distill_one_step(
         group_latents = []
 
         with torch.no_grad():  # Disable gradients for this entire pass
+            model_input = normalize_dit_input(model_type, latents)
+            # --- Perform a single forward pass (copied from your original code) ---
+            bsz = model_input.shape[0]
+            index = torch.randint(
+                0, num_euler_timesteps, (bsz,), device=model_input.device
+            ).long()
+            if sp_size > 1:
+                broadcast(index)
+            sigmas = extract_into_tensor(solver.sigmas, index, model_input.shape)
+            sigmas_prev = extract_into_tensor(
+                solver.sigmas_prev, index, model_input.shape
+            )
+            timesteps = (sigmas * noise_scheduler.config.num_train_timesteps).view(-1)
+            timesteps_prev = (
+                sigmas_prev * noise_scheduler.config.num_train_timesteps
+            ).view(-1)
             for i in range(group_size):
-                model_input = normalize_dit_input(model_type, latents)
                 # Generate and store unique noise for each sample
                 noise = torch.randn_like(model_input)
                 group_noises.append(noise)
 
-                # --- Perform a single forward pass (copied from your original code) ---
-                bsz = model_input.shape[0]
-                index = torch.randint(
-                    0, num_euler_timesteps, (bsz,), device=model_input.device
-                ).long()
-                if sp_size > 1:
-                    broadcast(index)
-                sigmas = extract_into_tensor(solver.sigmas, index, model_input.shape)
-                sigmas_prev = extract_into_tensor(
-                    solver.sigmas_prev, index, model_input.shape
-                )
-                timesteps = (sigmas * noise_scheduler.config.num_train_timesteps).view(-1)
-                timesteps_prev = (
-                    sigmas_prev * noise_scheduler.config.num_train_timesteps
-                ).view(-1)
                 noisy_model_input = sigmas * noise + (1.0 - sigmas) * model_input
         
                 with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -252,9 +252,24 @@ def distill_one_step(
                 latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
                 images_0 = vae.decode(latents_0, return_dict=False)[0]
                 images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
-                image_rewards = image_reward_fn(images_0.squeeze(2), caption)
+                video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4) # [B, T, C, H, W]
 
-                video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
+                # # --- Save a quick temporary video (rank 0, first sample) ---
+                # try:
+                #     if int(os.environ.get("RANK", "0")) == 0:
+                #         from diffusers.utils import export_to_video
+                #         os.makedirs("./tmp_videos", exist_ok=True)
+                #         # images_0: [B, C, T, H, W] in [0,1]; take first item and convert to (T,H,W,C) uint8
+                #         vid = (
+                #             video_0[0].detach().cpu().permute(0, 2, 3, 1)  # (T,H,W,C)
+                #             .clamp(0, 1)
+                #         )
+                #         path = f"./tmp_videos/tmp_{int(time.time())}.mp4"
+                #         export_to_video((vid.numpy() * 255).astype("uint8"), path, fps=8)
+                # except Exception:
+                #     pass
+
+                image_rewards = image_reward_fn(images_0.squeeze(0).permute(1, 0, 2, 3), caption)
                 global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
 
                 group_image_rewards.append(image_rewards.mean())
@@ -511,7 +526,7 @@ def main(args):
         precision="fp16",
         rm_ckpt_dir="/mnt/iftekhar/minhquan-local/InternVideo2-Stage2_1B-224p-f4/InternVideo2-stage2_1b-224p-f4.pt",
         OT_map_ckpt_dir="/media/minhquan/hummingbird-video/OT_maps_v1/OT_map_156000.pt",
-        n_frames=8,
+        n_frames=40,
     )
     if args.use_ema:
         ema_transformer = deepcopy(transformer)

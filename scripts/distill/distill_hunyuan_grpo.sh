@@ -18,7 +18,7 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     --validation_prompt_dir "data/Image-Vid-Finetune-HunYuan-MovieGenBench-Prompts/validation"\
     --gradient_checkpointing\
     --train_batch_size=1\
-    --num_latent_t 8 \
+    --num_latent_t 16 \
     --sp_size 8 \
     --train_sp_batch_size 1\
     --dataloader_num_workers 4\
