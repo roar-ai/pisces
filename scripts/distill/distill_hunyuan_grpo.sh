@@ -22,7 +22,7 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     --sp_size 8 \
     --train_sp_batch_size 1\
     --dataloader_num_workers 4\
-    --gradient_accumulation_steps=8\
+    --gradient_accumulation_steps=4\
     --max_train_steps=256\
     --learning_rate=1e-6\
     --mixed_precision="bf16"\
@@ -34,7 +34,7 @@ torchrun --nnodes 1 --nproc_per_node 8 \
     --ema_start_step 0\
     --cfg 0.0\
     --log_validation\
-    --output_dir="$DATA_DIR/outputs/hy_pot_grpo16_gradacc8"\
+    --output_dir="$DATA_DIR/outputs/hy_pot_grpo8_gradacc4"\
     --tracker_project_name Hunyuan_Distill \
     --num_height 720 \
     --num_width 1280 \
