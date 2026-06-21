@@ -300,6 +300,7 @@ VAE_TILING=1 bash scripts/distill/distill_hunyuan.sh
 
 # Override paths or GPU count.
 NUM_GPUS=8 \
+SP_SIZE=8 \
 DATA_DIR=/path/to/data \
 PRETRAINED_DIR=/path/to/pretrained \
 bash scripts/distill/distill_hunyuan.sh
@@ -364,6 +365,13 @@ bottleneck.
   memory further. Adjust the spatial tile with `--vae_tile_sample_size`.
 - The options are independent and can be combined when either one alone is not
   sufficient.
+
+For the released 8-GPU, 8-latent-frame recipe, keep `SP_SIZE=8` (the script
+default). This gives each rank one temporal latent before VAE decoding and
+matches the paper's effective batch size. Reducing `SP_SIZE` makes each rank
+decode more frames; at 720p this can exceed PyTorch's `INT_MAX` limit for
+`upsample_nearest3d`. If a smaller sequence-parallel group is required, enable
+`VAE_TILING=1`.
 
 Transformer activation checkpointing is controlled separately by
 `--gradient_checkpointing`.

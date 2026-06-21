@@ -1,9 +1,11 @@
 from argparse import Namespace
 
 import pytest
+import torch
 
 from fastvideo.pisces_config import (
     get_lora_target_modules,
+    validate_hunyuan_vae_decode_shape,
     validate_training_args,
 )
 
@@ -26,6 +28,8 @@ def make_args(**overrides):
         "lora_alpha": 32,
         "max_train_steps": 256,
         "multi_phased_distill_schedule": "4000-1",
+        "num_latent_t": 8,
+        "sp_size": 8,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -91,3 +95,25 @@ def test_hunyuan_lora_defaults_and_override():
         "linear2",
     ]
     assert get_lora_target_modules("hunyuan", "foo, bar") == ["foo", "bar"]
+
+
+def test_latent_frames_must_be_divisible_by_sequence_parallel_size():
+    with pytest.raises(ValueError, match="must be divisible"):
+        validate_training_args(make_args(num_latent_t=8, sp_size=3))
+
+
+def test_hunyuan_vae_decode_rejects_int32_overflow():
+    latents = torch.empty(1, 16, 4, 98, 160, device="meta")
+    with pytest.raises(RuntimeError, match="INT_MAX"):
+        validate_hunyuan_vae_decode_shape(latents, tiling_enabled=False)
+
+
+def test_hunyuan_vae_decode_accepts_temporal_shard_or_tiling():
+    validate_hunyuan_vae_decode_shape(
+        torch.empty(1, 16, 1, 98, 160, device="meta"),
+        tiling_enabled=False,
+    )
+    validate_hunyuan_vae_decode_shape(
+        torch.empty(1, 16, 4, 98, 160, device="meta"),
+        tiling_enabled=True,
+    )

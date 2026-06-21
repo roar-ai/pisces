@@ -28,6 +28,7 @@ from fastvideo.models.mochi_hf.mochi_latents_utils import normalize_dit_input
 from fastvideo.models.mochi_hf.pipeline_mochi import linear_quadratic_schedule
 from fastvideo.pisces_config import (
     get_lora_target_modules,
+    validate_hunyuan_vae_decode_shape,
     validate_training_args,
 )
 from fastvideo.reward_fn import get_reward_fn
@@ -169,6 +170,10 @@ def distill_one_step(
             )
 
             latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
+            validate_hunyuan_vae_decode_shape(
+                latents_0,
+                tiling_enabled=getattr(vae, "use_spatial_tiling", False),
+            )
             images_0 = vae.decode(latents_0, return_dict=False)[0]
             images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
 

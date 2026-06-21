@@ -1,5 +1,12 @@
 """Configuration helpers shared by the PISCES training entry point and tests."""
 
+import torch
+
+
+HUNYUAN_VAE_UPSAMPLE_CHANNELS = 256
+HUNYUAN_VAE_TEMPORAL_SCALE = 4
+HUNYUAN_VAE_SPATIAL_SCALE = 8
+
 
 def get_lora_target_modules(model_type, target_modules):
     if target_modules is not None:
@@ -66,3 +73,45 @@ def validate_training_args(args):
         raise ValueError("--max_train_steps must be a positive integer.")
     if args.multi_phased_distill_schedule is None:
         raise ValueError("--multi_phased_distill_schedule is required.")
+    if args.num_latent_t % args.sp_size:
+        raise ValueError(
+            "--num_latent_t must be divisible by --sp_size, got "
+            f"{args.num_latent_t} and {args.sp_size}."
+        )
+
+
+def validate_hunyuan_vae_decode_shape(latents, *, tiling_enabled):
+    """Reject full-frame decodes that exceed PyTorch's 32-bit upsample limit."""
+
+    if tiling_enabled:
+        return
+    if latents.ndim != 5:
+        raise ValueError(
+            "Hunyuan VAE latents must have shape [B, C, T, H, W]."
+        )
+
+    batch, _, latent_frames, latent_height, latent_width = latents.shape
+    temporal_upsample_frames = HUNYUAN_VAE_TEMPORAL_SCALE * max(
+        latent_frames - 1, 0
+    )
+    if temporal_upsample_frames == 0:
+        return
+
+    output_elements = (
+        batch
+        * HUNYUAN_VAE_UPSAMPLE_CHANNELS
+        * temporal_upsample_frames
+        * latent_height
+        * HUNYUAN_VAE_SPATIAL_SCALE
+        * latent_width
+        * HUNYUAN_VAE_SPATIAL_SCALE
+    )
+    int32_max = torch.iinfo(torch.int32).max
+    if output_elements > int32_max:
+        raise RuntimeError(
+            "The full-frame Hunyuan VAE decode would create an intermediate "
+            f"upsample tensor with {output_elements:,} elements, exceeding "
+            f"PyTorch's INT_MAX limit ({int32_max:,}). Increase --sp_size so "
+            "each rank decodes fewer latent frames, or enable --vae_tiling "
+            "(VAE_TILING=1 in scripts/distill/distill_hunyuan.sh)."
+        )

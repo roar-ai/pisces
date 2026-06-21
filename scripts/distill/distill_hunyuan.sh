@@ -8,6 +8,7 @@ DATA_DIR="${DATA_DIR:-data}"
 PRETRAINED_DIR="${PRETRAINED_DIR:-pretrained}"
 RUN_NAME="${RUN_NAME:-pisces_hunyuan_full}"
 NUM_GPUS="${NUM_GPUS:-8}"
+SP_SIZE="${SP_SIZE:-$NUM_GPUS}"
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-256}"
 
 MODEL_DIR="${MODEL_DIR:-$DATA_DIR/hunyuan}"
@@ -37,7 +38,7 @@ torchrun --standalone --nnodes 1 --nproc_per_node "$NUM_GPUS" \
     --gradient_checkpointing \
     --train_batch_size 1 \
     --num_latent_t 8 \
-    --sp_size 2 \
+    --sp_size "$SP_SIZE" \
     --train_sp_batch_size 1 \
     --dataloader_num_workers 4 \
     --gradient_accumulation_steps 32 \
