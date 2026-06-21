@@ -28,11 +28,40 @@ def test_video_token_geometry():
 
 def test_lexical_token_selection_excludes_padding_and_special_tokens():
     tokenized_text = {
+        "input_ids": torch.tensor([[101, 10, 11, 102, 0]]),
         "attention_mask": torch.tensor([[1, 1, 1, 1, 0]]),
-        "special_tokens_mask": torch.tensor([[1, 0, 0, 1, 1]]),
     }
-    indices = _get_lexical_token_indices(tokenized_text)
+    tokenizer = SimpleNamespace(
+        cls_token_id=101,
+        sep_token_id=102,
+        pad_token_id=0,
+    )
+    indices = _get_lexical_token_indices(tokenized_text, tokenizer)
     assert indices.tolist() == [1, 2]
+
+
+def test_internvideo_single_sequence_tokenizer_metadata_has_matching_length(
+    tmp_path,
+):
+    from fastvideo.intern_vid2.models.backbones.bert.tokenization_bert import (
+        BertTokenizer,
+    )
+
+    vocab_path = tmp_path / "vocab.txt"
+    vocab_path.write_text(
+        "[PAD]\n[UNK]\n[CLS]\n[SEP]\n[MASK]\ntoken\n",
+        encoding="utf-8",
+    )
+    tokenizer = BertTokenizer(vocab_file=str(vocab_path))
+
+    token_ids = [tokenizer.convert_tokens_to_ids("token")] * 299
+    model_ids = tokenizer.build_inputs_with_special_tokens(token_ids)
+    special_mask = tokenizer.get_special_tokens_mask(token_ids)
+    token_types = tokenizer.create_token_type_ids_from_sequences(token_ids)
+
+    assert len(model_ids) == 300
+    assert len(special_mask) == len(model_ids)
+    assert len(token_types) == len(model_ids)
 
 
 def test_spatiotemporal_cost_and_sinkhorn_are_finite():

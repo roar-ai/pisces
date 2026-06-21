@@ -295,12 +295,12 @@ Useful environment overrides:
 # Run the shorter schedule.
 MAX_TRAIN_STEPS=192 bash scripts/distill/distill_hunyuan.sh
 
-# Add tiled decoding when decoder checkpointing alone does not fit.
-VAE_TILING=1 bash scripts/distill/distill_hunyuan.sh
+# Tiling is enabled by default. Disable it only when full-frame decode fits.
+VAE_TILING=0 bash scripts/distill/distill_hunyuan.sh
 
 # Override paths or GPU count.
 NUM_GPUS=8 \
-SP_SIZE=8 \
+SP_SIZE=2 \
 DATA_DIR=/path/to/data \
 PRETRAINED_DIR=/path/to/pretrained \
 bash scripts/distill/distill_hunyuan.sh
@@ -366,12 +366,14 @@ bottleneck.
 - The options are independent and can be combined when either one alone is not
   sufficient.
 
-For the released 8-GPU, 8-latent-frame recipe, keep `SP_SIZE=8` (the script
-default). This gives each rank one temporal latent before VAE decoding and
-matches the paper's effective batch size. Reducing `SP_SIZE` makes each rank
-decode more frames; at 720p this can exceed PyTorch's `INT_MAX` limit for
-`upsample_nearest3d`. If a smaller sequence-parallel group is required, enable
-`VAE_TILING=1`.
+The canonical script enables both options by default. Set `VAE_TILING=0` to
+disable tiling while retaining decoder checkpointing.
+
+The canonical script defaults to `SP_SIZE=2` with VAE tiling enabled. Set
+`SP_SIZE=8` for the earlier 8-GPU, 8-latent-frame configuration, where each
+rank decodes one temporal latent and the effective global batch size is 32.
+Without tiling, reducing `SP_SIZE` makes each rank decode more frames and can
+exceed PyTorch's `INT_MAX` limit for `upsample_nearest3d`.
 
 Transformer activation checkpointing is controlled separately by
 `--gradient_checkpointing`.

@@ -246,14 +246,19 @@ def _load_internvideo2(rm_ckpt_dir: str, n_frames: int):
     return setup_internvideo2(config)
 
 
-def _get_lexical_token_indices(tokenized_text):
+def _get_lexical_token_indices(tokenized_text, tokenizer):
     """Return non-padding, non-special token positions for one caption."""
 
-    attention_mask = tokenized_text["attention_mask"][0].bool()
-    special_tokens_mask = tokenized_text.get("special_tokens_mask")
-    if special_tokens_mask is not None:
-        attention_mask &= ~special_tokens_mask[0].bool()
-    return attention_mask.nonzero(as_tuple=False).squeeze(1)
+    lexical_mask = tokenized_text["attention_mask"][0].bool()
+    input_ids = tokenized_text["input_ids"][0]
+    for token_id in (
+        tokenizer.cls_token_id,
+        tokenizer.sep_token_id,
+        tokenizer.pad_token_id,
+    ):
+        if token_id is not None:
+            lexical_mask &= input_ids != token_id
+    return lexical_mask.nonzero(as_tuple=False).squeeze(1)
 
 
 def get_intern_vid2_score_fn(
@@ -318,12 +323,11 @@ def get_intern_vid2_score_fn(
                 padding="max_length",
                 truncation=True,
                 max_length=300 if use_pot_tokens else 40,
-                return_special_tokens_mask=use_pot_tokens,
                 return_tensors="pt",
             ).to(device)
             valid_indices = None
             if use_ot and use_pot_tokens:
-                valid_indices = _get_lexical_token_indices(text)
+                valid_indices = _get_lexical_token_indices(text, tokenizer)
 
         if use_ot:
             r_global, r_finegrained = vi_clip.reward_OT(

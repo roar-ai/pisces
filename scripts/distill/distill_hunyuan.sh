@@ -8,8 +8,9 @@ DATA_DIR="${DATA_DIR:-data}"
 PRETRAINED_DIR="${PRETRAINED_DIR:-pretrained}"
 RUN_NAME="${RUN_NAME:-pisces_hunyuan_full}"
 NUM_GPUS="${NUM_GPUS:-8}"
-SP_SIZE="${SP_SIZE:-$NUM_GPUS}"
+SP_SIZE="${SP_SIZE:-2}"
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-256}"
+VAE_TILING="${VAE_TILING:-1}"
 
 MODEL_DIR="${MODEL_DIR:-$DATA_DIR/hunyuan}"
 DATA_JSON_PATH="${DATA_JSON_PATH:-$DATA_DIR/HD-Mixkit-Finetune-Hunyuan/videos2caption.json}"
@@ -19,10 +20,10 @@ OT_MAP_CKPT_DIR="${OT_MAP_CKPT_DIR:-$PRETRAINED_DIR/OT_map_156000.pt}"
 OUTPUT_DIR="${OUTPUT_DIR:-$DATA_DIR/outputs/$RUN_NAME}"
 
 # The differentiable 3D VAE decode is the main activation-memory bottleneck.
-# Decoder checkpointing is enabled by default. Set VAE_TILING=1 to additionally
-# decode overlapping spatial/temporal tiles when checkpointing alone is not enough.
+# Decoder checkpointing and tiled decoding are enabled by default. Set
+# VAE_TILING=0 only when full-frame decoding is known to fit safely.
 VAE_MEMORY_ARGS=(--vae_decode_checkpointing)
-if [[ "${VAE_TILING:-0}" == "1" ]]; then
+if [[ "$VAE_TILING" == "1" ]]; then
     VAE_MEMORY_ARGS+=(--vae_tiling --vae_tile_sample_size "${VAE_TILE_SAMPLE_SIZE:-256}")
 fi
 

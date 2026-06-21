@@ -294,7 +294,9 @@ class BertTokenizer(PreTrainedTokenizer):
 
         if token_ids_1 is not None:
             return [1] + ([0] * len(token_ids_0)) + [1] + ([0] * len(token_ids_1)) + [1]
-        return [1] + ([0] * len(token_ids_0)) + [1]
+        # ``build_inputs_with_special_tokens`` uses ``[CLS] X`` for one
+        # sequence, so the mask must not invent a trailing ``[SEP]`` token.
+        return [1] + ([0] * len(token_ids_0))
 
     def create_token_type_ids_from_sequences(
         self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
@@ -318,7 +320,7 @@ class BertTokenizer(PreTrainedTokenizer):
         sep = [self.sep_token_id]
         cls = [self.cls_token_id]
         if token_ids_1 is None:
-            return len(cls + token_ids_0 + sep) * [0]
+            return len(cls + token_ids_0) * [0]
         return len(cls + token_ids_0 + sep) * [0] + len(token_ids_1 + sep) * [1]
 
     def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> Tuple[str]:
