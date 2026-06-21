@@ -1,187 +1,408 @@
 <div align="center">
-<img src=assets/logo.jpg width="30%"/>
+<img src="assets/logo.jpg" width="30%"/>
+
+# PISCES
+
+### Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards
+
+[Paper](https://arxiv.org/abs/2602.01624) · ICML 2026
 </div>
 
-FastVideo is a lightweight framework for accelerating large video diffusion models.
+PISCES is an annotation-free post-training method for text-to-video diffusion
+models. It aligns the text and video embedding spaces of InternVideo2 with two
+complementary rewards:
 
-https://github.com/user-attachments/assets/064ac1d2-11ed-4a0c-955b-4d412a96ef30
+- **Quality reward:** a distributional Neural Optimal Transport (OT) map aligns
+  global text and real-video embeddings.
+- **Semantic reward:** a token-level partial OT plan adds semantic,
+  spatio-temporal structure to InternVideo2 cross-attention.
 
+The reward module supports direct backpropagation and reinforcement learning.
+This repository focuses on the direct-backpropagation recipe used for
+HunyuanVideo. It is built on the
+[FastVideo](https://github.com/hao-ai-lab/FastVideo) training framework.
 
-<p align="center">
-    🤗 <a href="https://huggingface.co/FastVideo/FastHunyuan"  target="_blank">FastHunyuan</a>  | 🤗 <a href="https://huggingface.co/FastVideo/FastMochi-diffusers" target="_blank">FastMochi</a> | 🎮 <a href="https://discord.gg/REBzDQTWWt" target="_blank"> Discord </a> | 🕹️ <a href="https://replicate.com/lucataco/fast-hunyuan-video" target="_blank"> Replicate </a> 
-</p> 
+## Implementation map
 
+The two OT components are separate and should not be confused:
 
-FastVideo currently offers: (with more to come)
+| Component | Purpose | Learned? | Main implementation |
+|---|---|---:|---|
+| Distributional Neural OT | Maps global text embeddings into the real-video embedding space for the quality reward | Yes | `fastvideo/optimal_transport.py`, trained by `train_OT_map.py` |
+| Token-level Partial OT (POT) | Builds a per-head text-to-video-patch transport prior for the semantic reward | No | `fastvideo/partial_optimal_transport.py`, injected from InternVideo2 `xbert.py` |
 
-- FastHunyuan and FastMochi: consistency distilled video diffusion models for 8x inference speedup.
-- First open distillation recipes for video DiT, based on [PCM](https://github.com/G-U-N/Phased-Consistency-Model).
-- Support distilling/finetuning/inferencing state-of-the-art open video DiTs: 1. Mochi 2. Hunyuan.
-- Scalable training with FSDP, sequence parallelism, and selective activation checkpointing, with near linear scaling to 64 GPUs.
-- Memory efficient finetuning with LoRA, precomputed latent, and precomputed text embeddings.
+The direct-backpropagation path is:
 
-Dev in progress and highly experimental.
-
-## 🎥 More Demos
-
-Fast-Mochi comparison with original Mochi, achieving an 8X diffusion speed boost with the FastVideo framework.
-
-https://github.com/user-attachments/assets/5fbc4596-56d6-43aa-98e0-da472cf8e26c
-
-Comparison between OpenAI Sora, original Hunyuan and FastHunyuan
-
-https://github.com/user-attachments/assets/d323b712-3f68-42b2-952b-94f6a49c4836
-
-Comparison between original FastHunyuan, LLM-INT8 quantized FastHunyuan and NF4 quantized FastHunyuan
-
-https://github.com/user-attachments/assets/cf89efb5-5f68-4949-a085-f41c1ef26c94
-
-## Change Log
-- ```2025/01/13```: Support Lora finetuning for HunyuanVideo.
-- ```2024/12/25```: Enable single 4090 inference for `FastHunyuan`, please rerun the installation steps to update the environment.
-- ```2024/12/17```: `FastVideo` v1.0 is released.
-
-
-## 🔧 Installation
-The code is tested on Python 3.10.0, CUDA 12.1 and H100.
-```
-./env_setup.sh fastvideo
+```text
+fastvideo/distill.py
+  └─ decodes predicted latents with the HunyuanVideo VAE
+     └─ fastvideo/reward_fn.py
+        └─ InternVideo2 reward_OT()
+           ├─ global [CLS] reward through the learned OT map
+           └─ VTM semantic reward through POT-refined cross-attention
 ```
 
-## 🚀 Inference
+See [docs/pot_implementation.md](docs/pot_implementation.md) for the complete
+POT tensor flow, equations, defaults, source locations, and implementation
+assumptions.
 
-### Inference FastHunyuan on single RTX4090
-We now support NF4 and LLM-INT8 quantized inference using BitsAndBytes for FastHunyuan. With NF4 quantization, inference can be performed on a single RTX 4090 GPU, requiring just 20GB of VRAM.
-```bash
-# Download the model weight
-python scripts/huggingface/download_hf.py --repo_id=FastVideo/FastHunyuan-diffusers --local_dir=data/FastHunyuan-diffusers --repo_type=model
-# CLI inference
-bash scripts/inference/inference_hunyuan_hf_quantization.sh
-```
-For more information about the VRAM requirements for BitsAndBytes quantization, please refer to the table below (timing measured on an H100 GPU):
+## Installation
 
-
-| Configuration                  | Memory to Init Transformer | Peak Memory After Init Pipeline (Denoise) | Diffusion Time | End-to-End Time |
-|--------------------------------|----------------------------|--------------------------------------------|----------------|-----------------|
-| BF16 + Pipeline CPU Offload    | 23.883G                   | 33.744G                                    | 81s            | 121.5s          |
-| INT8 + Pipeline CPU Offload    | 13.911G                   | 27.979G                                    | 88s            | 116.7s          |
-| NF4 + Pipeline CPU Offload     | 9.453G                    | 19.26G                                     | 78s            | 114.5s          |
-           
-
-
-For improved quality in generated videos, we recommend using a GPU with 80GB of memory to run the BF16 model with the original Hunyuan pipeline. To execute the inference, use the following section:
-
-### FastHunyuan
-```bash
-# Download the model weight
-python scripts/huggingface/download_hf.py --repo_id=FastVideo/FastHunyuan --local_dir=data/FastHunyuan --repo_type=model
-# CLI inference
-bash scripts/inference/inference_hunyuan.sh
-```
-You can also inference FastHunyuan in the [official Hunyuan github](https://github.com/Tencent/HunyuanVideo).
-
-### FastMochi
+The tested environment uses Python 3.10, PyTorch 2.5.0, CUDA 12.4, and NVIDIA
+A100/H100 GPUs.
 
 ```bash
-# Download the model weight
-python scripts/huggingface/download_hf.py --repo_id=FastVideo/FastMochi-diffusers --local_dir=data/FastMochi-diffusers --repo_type=model
-# CLI inference
-bash scripts/inference/inference_mochi_sp.sh
+# Install uv if it is not already available.
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create .venv and install the CUDA/Python dependencies.
+uv sync --extra lint
 ```
 
+`bash env_setup.sh` runs the same environment synchronization and installs the
+additional HPSv2 tokenizer asset used by legacy FastVideo reward functions.
+PISCES itself uses InternVideo2.
 
-## 🎯 Distill
-Our distillation recipe is based on [Phased Consistency Model](https://github.com/G-U-N/Phased-Consistency-Model). We did not find significant improvement using multi-phase distillation, so we keep the one phase setup similar to the original latent consistency model's recipe.
-We use the [MixKit](https://huggingface.co/datasets/LanguageBind/Open-Sora-Plan-v1.1.0/tree/main/all_mixkit) dataset for distillation. To avoid running the text encoder and VAE during training, we preprocess all data to generate text embeddings and VAE latents.
-Preprocessing instructions can be found [data_preprocess.md](docs/data_preprocess.md). For convenience, we also provide preprocessed data that can be downloaded directly using the following command:
+### Download model weights
+
+Download the original HunyuanVideo weights:
+
 ```bash
-python scripts/huggingface/download_hf.py --repo_id=FastVideo/HD-Mixkit-Finetune-Hunyuan --local_dir=data/HD-Mixkit-Finetune-Hunyuan --repo_type=dataset
+uv run python scripts/huggingface/download_hf.py \
+  --repo_id FastVideo/hunyuan \
+  --local_dir data/hunyuan \
+  --repo_type model
 ```
-Next, download the original model weights with:
+
+InternVideo2 is gated on Hugging Face. Accept its license, authenticate with
+Hugging Face, and download the checkpoint:
+
 ```bash
-python scripts/huggingface/download_hf.py --repo_id=FastVideo/hunyuan --local_dir=data/hunyuan --repo_type=model # original hunyuan
-python scripts/huggingface/download_hf.py --repo_id=genmo/mochi-1-preview --local_dir=data/mochi --repo_type=model # original mochi
+uv run huggingface-cli login
+uv run python scripts/huggingface/download_hf.py \
+  --repo_id OpenGVLab/InternVideo2-Stage2_1B-224p-f4 \
+  --local_dir pretrained \
+  --repo_type model
 ```
-To launch the distillation process, use the following commands:
-```
-bash scripts/distill/distill_hunyuan.sh # for hunyuan
-bash scripts/distill/distill_mochi.sh # for mochi
-```
-We also provide an optional script for distillation with adversarial loss, located at `fastvideo/distill_adv.py`. Although we tried adversarial loss, we did not observe significant improvements.
-## Finetune
-### ⚡ Full Finetune
-Ensure your data is prepared and preprocessed in the format specified in [data_preprocess.md](docs/data_preprocess.md). For convenience, we also provide a mochi preprocessed Black Myth Wukong data that can be downloaded directly:
+
+The paper OT map is included at
+`pretrained/OT_map_156000.pt`. You can use it directly or train a new map as
+described below.
+
+## Data
+
+PISCES uses different data for OT-map training and video-model post-training.
+
+### WebVid10M for the OT map
+
+We train the distributional OT map on WebVid10M text-video pairs. See the
+[official WebVid repository](https://github.com/m-bain/webvid) for its terms and
+availability. A community copy of the metadata is available from
+[TempoFunk/webvid-10M](https://huggingface.co/datasets/TempoFunk/webvid-10M).
+You are responsible for ensuring that your use and download of the source
+videos complies with the dataset and source-site terms.
+
+Download the metadata and use
+[video2dataset](https://github.com/iejMac/video2dataset) to create WebDataset
+shards:
+
 ```bash
-python scripts/huggingface/download_hf.py --repo_id=FastVideo/Mochi-Black-Myth --local_dir=data/Mochi-Black-Myth --repo_type=dataset
-```
-Download the original model weights as specified in [Distill Section](#-distill):
+uv run huggingface-cli download TempoFunk/webvid-10M \
+  --repo-type dataset \
+  --local-dir data/webvid_metadata
 
-Then you can run the finetune with:
-```
-bash scripts/finetune/finetune_mochi.sh # for mochi
-```
-**Note that for finetuning, we did not tune the hyperparameters in the provided script.**
-### ⚡ Lora Finetune 
+# Merge the partitioned CSV metadata while keeping one header.
+awk 'FNR == 1 && NR != 1 { next } { print }' \
+  data/webvid_metadata/data/train/partitions/*.csv \
+  > data/webvid_metadata/train.csv
 
-Hunyuan supports Lora fine-tuning of videos up to 720p. Demos and prompts of Black-Myth-Wukong can be found in [here](https://huggingface.co/FastVideo/Hunyuan-Black-Myth-Wukong-lora-weight). You can download the Lora weight through:
+uv run video2dataset \
+  --url_list="data/webvid_metadata/train.csv" \
+  --input_format="csv" \
+  --output-format="webdataset" \
+  --output_folder="data/webvid_10m_train" \
+  --url_col="contentUrl" \
+  --caption_col="name" \
+  --save_additional_columns='[videoid,page_dir,duration]' \
+  --config=default
+```
+
+The OT dataloader expects numbered `.tar` shards. Each sample must contain
+matching video, caption, and metadata entries:
+
+```text
+data/webvid_10m_train/
+├── 00000.tar
+├── 00001.tar
+└── ...
+
+# Inside each tar:
+000010007.mp4
+000010007.txt
+000010007.json
+```
+
+Use a held-out shard for validation. For multi-GPU validation, either provide
+enough validation shards for all ranks or split one held-out shard:
+
 ```bash
-python scripts/huggingface/download_hf.py --repo_id=FastVideo/Hunyuan-Black-Myth-Wukong-lora-weight --local_dir=data/Hunyuan-Black-Myth-Wukong-lora-weight --repo_type=model
+uv run python scripts/split_val_shard.py \
+  data/webvid_10m_train/00000.tar \
+  data/webvid_10m_train/val_split \
+  8
 ```
-#### Minimum Hardware Requirement
-- 40 GB GPU memory each for 2 GPUs with lora.
-- 30 GB GPU memory each for 2 GPUs with CPU offload and lora.  
 
+### MixKit for post-training
 
-Currently, both Mochi and Hunyuan models support Lora finetuning through diffusers. To generate personalized videos from your own dataset, you'll need to follow three main steps: dataset preparation, finetuning, and inference.
+We use MixKit for video-model post-training. The source videos are available in
+the [Open-Sora-Plan MixKit collection](https://huggingface.co/datasets/LanguageBind/Open-Sora-Plan-v1.1.0/tree/main/all_mixkit).
+The precomputed HunyuanVideo latents and text embeddings can be downloaded with:
 
-#### Dataset Preparation
-We provide scripts to better help you get started to train on your own characters!  
-You can run this to organize your dataset to get the videos2caption.json before preprocess. Specify your video folder and corresponding caption folder (caption files should be .txt files and have the same name with its video):
-```
-python scripts/dataset_preparation/prepare_json_file.py --video_dir data/input_videos/ --prompt_dir data/captions/ --output_path data/output_folder/videos2caption.json --verbose
-```
-Also, we provide script to resize your videos:
-```
-python scripts/data_preprocess/resize_videos.py 
-```
-#### Finetuning
-After basic dataset preparation and preprocess, you can start to finetune your model using Lora:
-```
-bash scripts/finetune/finetune_hunyuan_hf_lora.sh
-```
-#### Inference
-For inference with Lora checkpoint, you can run the following scripts with additional parameter `--lora_checkpoint_dir`:
-```
-bash scripts/inference/inference_hunyuan_hf.sh 
-```
-**We also provide scripts for Mochi in the same directory.**
-
-#### Finetune with Both Image and Video
-Our codebase support finetuning with both image and video. 
 ```bash
-bash scripts/finetune/finetune_hunyuan.sh
-bash scripts/finetune/finetune_mochi_lora_mix.sh
+uv run python scripts/huggingface/download_hf.py \
+  --repo_id FastVideo/HD-Mixkit-Finetune-Hunyuan \
+  --local_dir data/HD-Mixkit-Finetune-Hunyuan \
+  --repo_type dataset
 ```
-For Image-Video Mixture Fine-tuning, make sure to enable the `--group_frame` option in your script.
 
-## 📑 Development Plan
+For custom datasets, follow [docs/data_preprocess.md](docs/data_preprocess.md)
+to produce `videos2caption.json`, VAE latents, prompt embeddings, and attention
+masks.
 
-- More distillation methods
-  - [ ] Add Distribution Matching Distillation
-- More models support
-  - [ ] Add CogvideoX model
-- Code update
-  - [ ] fp8 support
-  - [ ] faster load model and save model support
+In our experiments, post-training is short: roughly **192–256 optimizer
+steps**. At this scale we observed little sensitivity to the exact training
+dataset, and use MixKit for the released recipe.
 
-## 🤝 Contributing
+## Train the OT map
 
-We welcome all contributions. Please run `bash format.sh` before submitting a pull request.
+`train_OT_map.py` extracts frozen 512-dimensional InternVideo2 text and video
+features from 8-frame clips. Both the transport map and potential network are
+paper-faithful three-layer MLPs with ReLU and LayerNorm:
 
-## 🔧 Testing
-Run `pytest` to verify the data preprocessing, checkpoint saving, and sequence parallel pipelines. We recommend adding corresponding test cases in the `test` folder to support your contribution.
+```text
+T: 512 → 1024 → 1024 → 512
+f: 512 → 1024 → 1024 → 1
+```
 
-## Acknowledgement
-We learned and reused code from the following projects: [PCM](https://github.com/G-U-N/Phased-Consistency-Model), [diffusers](https://github.com/huggingface/diffusers), [OpenSoraPlan](https://github.com/PKU-YuanGroup/Open-Sora-Plan), and [xDiT](https://github.com/xdit-project/xDiT).
+The default command reproduces the single-GPU paper setting: batch size 128 and
+learning rate `1e-4`. Adjust the example shard range to match the shards
+produced by your WebVid10M download.
 
-We thank MBZUAI and Anyscale for their support throughout this project.
+```bash
+torchrun --standalone --nproc_per_node=1 train_OT_map.py \
+  --train-urls "data/webvid_10m_train/{00001..00036}.tar" \
+  --val-urls "data/webvid_10m_train/00000.tar" \
+  --iv2-ckpt pretrained/InternVideo2-stage2_1b-224p-f4.pt \
+  --output-dir data/outputs/ot_map \
+  --wandb
+```
+
+For multi-GPU training, launch one process per GPU. `--batch-size` is per GPU;
+reduce it if you want to preserve the paper's global batch size:
+
+```bash
+torchrun --standalone --nproc_per_node=8 train_OT_map.py \
+  --train-urls "data/webvid_10m_train/{00001..00036}.tar" \
+  --val-urls "data/webvid_10m_train/val_split/val_part_{0..7}.tar" \
+  --batch-size 16 \
+  --val-batch-size 16 \
+  --iv2-ckpt pretrained/InternVideo2-stage2_1b-224p-f4.pt \
+  --output-dir data/outputs/ot_map
+```
+
+Evaluation reports:
+
+- **Mutual KNN:** cross-modal neighborhood alignment.
+- **Spearman correlation:** preservation of pairwise text-embedding structure.
+
+The output directory contains resumable full checkpoints and raw reward-ready
+OT maps:
+
+```text
+checkpoints/
+├── last.pt                    # T, f, optimizers, schedulers, and metrics
+├── best_mknn.pt               # structured checkpoint
+├── best_struct.pt             # structured checkpoint
+├── ot_map_best_mknn.pt        # raw T state dict
+└── ot_map_best_struct.pt      # raw T state dict
+```
+
+Either a raw OT map or a structured checkpoint can be passed to
+`--ot_map_ckpt_dir`. Resume interrupted OT training with:
+
+```bash
+torchrun --standalone --nproc_per_node=1 train_OT_map.py \
+  --resume-from data/outputs/ot_map/checkpoints/last.pt \
+  --train-urls "data/webvid_10m_train/{00001..00036}.tar" \
+  --val-urls "data/webvid_10m_train/00000.tar"
+```
+
+## Token-level Partial OT implementation
+
+POT is computed online inside InternVideo2 and has no trainable weights or
+separate checkpoint. It is activated only when both `--use_ot_reward` and
+`--use_finegrained_reward_loss` are present.
+
+For each InternVideo2 cross-attention head:
+
+1. `fastvideo/reward_fn.py` selects lexical prompt tokens, excluding padding
+   and tokenizer special tokens.
+2. `fastvideo/partial_optimal_transport.py` constructs the paper's semantic,
+   temporal, and spatial cost:
+
+   ```text
+   C(i,j) = 1 - cos(y_i, x_j)
+            + 0.2 |E_A[frame | y_i] - frame_j|
+            + 0.2 ||E_A[position | y_i] - position_j||₂
+   ```
+
+3. A log-domain, entropically regularized unbalanced Sinkhorn solver
+   approximates partial transport with `epsilon=0.05` and transported mass
+   `m=0.9`.
+4. The row-normalized transport plan is detached and fused with ordinary
+   cross-attention in log space:
+
+   ```text
+   A_tilde = softmax(log(A + eps) + log(P* + eps))
+   ```
+
+5. InternVideo2's existing VTM classifier consumes the POT-refined features;
+   its positive-class probability is the fine-grained semantic reward.
+
+The transport plan is treated as a structural prior, so gradients pass through
+the original attention and reward model path, but not through the Sinkhorn
+iterations. The current InternVideo2 Stage-2 layout assumes one visual CLS token
+followed by a 16×16 patch grid per temporal frame. Token-level POT currently
+supports one video-caption pair per reward call.
+
+## Post-train HunyuanVideo
+
+The canonical full PISCES configuration enables:
+
+- distributional and token-level OT alignment;
+- global quality and fine-grained semantic rewards;
+- consistency distillation;
+- LoRA;
+- differentiable VAE decoder checkpointing.
+
+```bash
+bash scripts/distill/distill_hunyuan.sh
+```
+
+Useful environment overrides:
+
+```bash
+# Run the shorter schedule.
+MAX_TRAIN_STEPS=192 bash scripts/distill/distill_hunyuan.sh
+
+# Add tiled decoding when decoder checkpointing alone does not fit.
+VAE_TILING=1 bash scripts/distill/distill_hunyuan.sh
+
+# Override paths or GPU count.
+NUM_GPUS=8 \
+DATA_DIR=/path/to/data \
+PRETRAINED_DIR=/path/to/pretrained \
+bash scripts/distill/distill_hunyuan.sh
+```
+
+### Training settings and ablations
+
+Start from `scripts/distill/distill_hunyuan.sh`, then add or omit these flags:
+
+| Setting | Enabled | Disabled |
+|---|---|---|
+| OT alignment | `--use_ot_reward` | omit it for vanilla InternVideo2 rewards |
+| Global quality reward | `--use_global_reward_loss` | omit it |
+| Fine-grained semantic reward | `--use_finegrained_reward_loss` | omit it |
+| LoRA | `--use_lora` plus LoRA options | omit it for full-model tuning |
+| Consistency distillation | `--use_consistency_loss` | omit it |
+
+The corresponding loss weights are:
+
+```text
+--global_reward_loss_weight
+--finegrained_reward_loss_weight
+--consistency_loss_weight
+```
+
+Important behavior:
+
+- At least one consistency, reward, or prediction-decay objective must be
+  active.
+- `--use_ot_reward` only changes enabled reward objectives. It has no effect in
+  a consistency-only run.
+- POT requires both `--use_ot_reward` and
+  `--use_finegrained_reward_loss`. Global-only OT uses the learned map without
+  constructing a token transport plan.
+- The fine-grained POT path currently requires
+  `--train_batch_size 1`.
+- We recommend keeping consistency distillation enabled. It anchors the updated
+  model to the teacher distribution and helps reduce reward hacking.
+- Omitting `--use_lora` performs full-model fine-tuning and requires
+  substantially more optimizer and gradient memory.
+
+Example objective-only variants:
+
+```bash
+# Rewards without OT: omit --use_ot_reward.
+# Quality only: omit --use_finegrained_reward_loss.
+# Semantic only: omit --use_global_reward_loss.
+# Rewards without consistency: omit --use_consistency_loss.
+# Consistency only: omit both reward-loss flags and --use_ot_reward.
+```
+
+### VAE decoder memory bottleneck
+
+Reward-based direct backpropagation decodes predicted latents to pixels and
+backpropagates through the 3D VAE decoder into the denoiser. For long,
+high-resolution videos, saved decoder activations are often the dominant memory
+bottleneck.
+
+- `--vae_decode_checkpointing` recomputes decoder blocks during backward. It
+  usually preserves the standard decode path at the cost of additional compute.
+- `--vae_tiling` decodes overlapping spatial and temporal tiles, reducing peak
+  memory further. Adjust the spatial tile with `--vae_tile_sample_size`.
+- The options are independent and can be combined when either one alone is not
+  sufficient.
+
+Transformer activation checkpointing is controlled separately by
+`--gradient_checkpointing`.
+
+## Inference and GRPO
+
+PISCES reward models are used only during post-training and add no inference
+cost. Generated checkpoints can be used with the existing FastVideo Hunyuan
+inference utilities. Experimental GRPO entry points remain under
+`scripts/distill/`, but the maintained reproduction instructions above focus on
+direct backpropagation.
+
+## Testing
+
+```bash
+uv run pytest tests/test_optimal_transport.py tests/test_distill_config.py
+uv run pytest tests/test_partial_optimal_transport.py
+uv run ruff check fastvideo/optimal_transport.py \
+  fastvideo/partial_optimal_transport.py fastvideo/reward_fn.py \
+  fastvideo/distill.py train_OT_map.py
+bash -n scripts/distill/distill_hunyuan.sh
+```
+
+## Citation
+
+```bibtex
+@inproceedings{le2026pisces,
+  title     = {PISCES: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards},
+  author    = {Le, Minh-Quan and Mittal, Gaurav and Zhao, Cheng and Gu, David and Samaras, Dimitris and Chen, Mei},
+  booktitle = {International Conference on Machine Learning},
+  year      = {2026}
+}
+```
+
+## Acknowledgements
+
+This implementation builds on
+[FastVideo](https://github.com/hao-ai-lab/FastVideo),
+[InternVideo2](https://github.com/OpenGVLab/InternVideo),
+[Phased Consistency Models](https://github.com/G-U-N/Phased-Consistency-Model),
+[diffusers](https://github.com/huggingface/diffusers), and
+[video2dataset](https://github.com/iejMac/video2dataset).

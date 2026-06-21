@@ -1,13 +1,17 @@
 #!/bin/bash
+set -euo pipefail
 
-# install torch
-# pip install torch==2.5.0 torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0 --index-url https://download.pytorch.org/whl/cu124
+uv sync --extra lint
 
-# install FA2 and diffusers
-pip install packaging ninja && pip install flash-attn==2.7.0.post2 --no-build-isolation 
+# hpsv2 ships without bpe_simple_vocab_16e6.txt.gz; fetch it into the open_clip
+# package directory so the tokenizer can load it at runtime.
+HPSV2_OPEN_CLIP_DIR="$(uv run python -c 'import os, hpsv2; print(os.path.join(os.path.dirname(hpsv2.__file__), "src", "open_clip"))')"
+BPE_VOCAB_PATH="${HPSV2_OPEN_CLIP_DIR}/bpe_simple_vocab_16e6.txt.gz"
+BPE_VOCAB_URL="https://huggingface.co/OpenGVLab/ViCLIP-B-16-hf/resolve/main/bpe_simple_vocab_16e6.txt.gz"
 
-pip install -r requirements-lint.txt
-
-# install fastvideo
-pip install -e .
+if [ ! -f "${BPE_VOCAB_PATH}" ]; then
+    echo "Downloading bpe_simple_vocab_16e6.txt.gz to ${BPE_VOCAB_PATH}"
+    curl -fL --retry 3 -o "${BPE_VOCAB_PATH}" "${BPE_VOCAB_URL}"
+else
+    echo "bpe_simple_vocab_16e6.txt.gz already present at ${BPE_VOCAB_PATH}"
+fi

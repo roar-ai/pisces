@@ -355,6 +355,10 @@ def load_text_encoder(model_type, pretrained_model_name_or_path, device):
 
 
 def get_no_split_modules(transformer):
+    if hasattr(transformer, "get_base_model"):
+        transformer = transformer.get_base_model()
+    if hasattr(transformer, "base_model") and hasattr(transformer.base_model, "model"):
+        transformer = transformer.base_model.model
     # if of type MochiTransformer3DModel
     if isinstance(transformer, MochiTransformer3DModel):
         return (MochiTransformerBlock, )

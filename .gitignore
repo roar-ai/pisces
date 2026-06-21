@@ -51,4 +51,9 @@ outputs_video
 sbatch.sh
 *.out
 env
+.env
+.vscode/
 flash-attention/
+logs/
+pretrained/*
+!pretrained/OT_map_156000.pt

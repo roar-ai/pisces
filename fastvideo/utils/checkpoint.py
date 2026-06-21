@@ -254,7 +254,7 @@ def resume_training(model, optimizer, checkpoint_dir, discriminator=False):
 
 
 def save_lora_checkpoint(transformer, optimizer, rank, output_dir, step,
-                         pipeline):
+                         pipeline=None):
     with FSDP.state_dict_type(
             transformer,
             StateDictType.FULL_STATE_DICT,
@@ -275,20 +275,26 @@ def save_lora_checkpoint(transformer, optimizer, rank, output_dir, step,
         torch.save(lora_optim_state, optim_path)
         # save lora weight
         main_print(f"--> saving LoRA checkpoint at step {step}")
+        peft_model = getattr(transformer, "module", transformer)
         transformer_lora_layers = get_peft_model_state_dict(
-            model=transformer, state_dict=full_state_dict)
-        pipeline.save_lora_weights(
-            save_directory=save_dir,
-            transformer_lora_layers=transformer_lora_layers,
-            is_main_process=True,
-        )
+            model=peft_model, state_dict=full_state_dict)
+        if pipeline is not None:
+            pipeline.save_lora_weights(
+                save_directory=save_dir,
+                transformer_lora_layers=transformer_lora_layers,
+                is_main_process=True,
+            )
+        else:
+            save_file(transformer_lora_layers,
+                      os.path.join(save_dir, "adapter_model.safetensors"))
         # save config
+        model_config = getattr(peft_model, "config", None)
         lora_config = {
             "step": step,
             "lora_params": {
-                "lora_rank": transformer.config.lora_rank,
-                "lora_alpha": transformer.config.lora_alpha,
-                "target_modules": transformer.config.lora_target_modules,
+                "lora_rank": getattr(model_config, "lora_rank", None),
+                "lora_alpha": getattr(model_config, "lora_alpha", None),
+                "target_modules": getattr(model_config, "lora_target_modules", None),
             },
         }
         config_path = os.path.join(save_dir, "lora_config.json")

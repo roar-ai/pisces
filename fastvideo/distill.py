@@ -1,4 +1,4 @@
-# !/bin/python3
+#!/usr/bin/env python3
 # isort: skip_file
 import argparse
 import math
@@ -7,8 +7,6 @@ import time
 from collections import deque
 from copy import deepcopy
 
-from fastvideo.models.hunyuan.vae import load_vae
-from fastvideo.reward_fn import get_reward_fn
 import torch
 import torch.distributed as dist
 import wandb
@@ -16,7 +14,7 @@ from accelerate.utils import set_seed
 from diffusers import FlowMatchEulerDiscreteScheduler
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
-from peft import LoraConfig
+from peft import LoraConfig, get_peft_model
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import ShardingStrategy
 from torch.utils.data import DataLoader
@@ -25,8 +23,14 @@ from tqdm.auto import tqdm
 
 from fastvideo.dataset.latent_datasets import LatentDataset, latent_collate_function
 from fastvideo.distill.solver import EulerSolver, extract_into_tensor
+from fastvideo.models.hunyuan.vae import load_vae
 from fastvideo.models.mochi_hf.mochi_latents_utils import normalize_dit_input
 from fastvideo.models.mochi_hf.pipeline_mochi import linear_quadratic_schedule
+from fastvideo.pisces_config import (
+    get_lora_target_modules,
+    validate_training_args,
+)
+from fastvideo.reward_fn import get_reward_fn
 from fastvideo.utils.checkpoint import (
     resume_lora_optimizer,
     save_checkpoint,
@@ -46,14 +50,13 @@ from fastvideo.utils.parallel_states import (
     initialize_sequence_parallel_state,
 )
 from fastvideo.utils.validation import log_validation
-import matplotlib.pyplot as plt
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.31.0")
 
 
 def main_print(content):
-    if int(os.environ["LOCAL_RANK"]) <= 0:
+    if int(os.environ.get("RANK", 0)) == 0:
         print(content)
 
 
@@ -63,39 +66,18 @@ def reshard_fsdp(model):
             torch.distributed.fsdp._runtime_utils._reshard(m, m._handle, True)
 
 
-def get_norm(model_pred, norms, gradient_accumulation_steps):
-    fro_norm = (
-        torch.linalg.matrix_norm(model_pred, ord="fro")  # codespell:ignore
-        / gradient_accumulation_steps
-    )
-    largest_singular_value = (
-        torch.linalg.matrix_norm(model_pred, ord=2) / gradient_accumulation_steps
-    )
-    absolute_mean = torch.mean(torch.abs(model_pred)) / gradient_accumulation_steps
-    absolute_max = torch.max(torch.abs(model_pred)) / gradient_accumulation_steps
-    dist.all_reduce(fro_norm, op=dist.ReduceOp.AVG)
-    dist.all_reduce(largest_singular_value, op=dist.ReduceOp.AVG)
-    dist.all_reduce(absolute_mean, op=dist.ReduceOp.AVG)
-    norms["fro"] += torch.mean(fro_norm).item()  # codespell:ignore
-    norms["largest singular value"] += torch.mean(largest_singular_value).item()
-    norms["absolute mean"] += absolute_mean.item()
-    norms["absolute max"] += absolute_max.item()
-
-
 def distill_one_step(
     transformer,
     model_type,
     teacher_transformer,
     ema_transformer,
     vae,
-    image_reward_fn,
     video_reward_fn,
     optimizer,
     lr_scheduler,
     loader,
     noise_scheduler,
     solver,
-    noise_random_generator,
     gradient_accumulation_steps,
     sp_size,
     max_grad_norm,
@@ -109,24 +91,36 @@ def distill_one_step(
     pred_decay_weight,
     pred_decay_type,
     hunyuan_teacher_disable_cfg,
+    use_consistency_loss,
+    use_global_reward_loss,
+    use_finegrained_reward_loss,
+    consistency_loss_weight,
+    global_reward_loss_weight,
+    finegrained_reward_loss_weight,
 ):
+    use_video_reward_loss = use_global_reward_loss or use_finegrained_reward_loss
+    if use_video_reward_loss and video_reward_fn is None:
+        raise ValueError(
+            "video_reward_fn is required when a video reward loss is enabled."
+        )
+    if use_video_reward_loss and vae is None:
+        raise ValueError("A VAE is required when a video reward loss is enabled.")
+    if use_consistency_loss and teacher_transformer is None:
+        raise ValueError(
+            "teacher_transformer is required when consistency loss is enabled."
+        )
+
+    total_train_loss = 0.0
     total_distill_loss = 0.0
-    total_image_loss = 0.0
     total_global_loss = 0.0
     total_finegrained_loss = 0.0
 
-    optimizer.zero_grad()
-    model_pred_norm = {
-        "fro": 0.0,  # codespell:ignore
-        "largest singular value": 0.0,
-        "absolute mean": 0.0,
-        "absolute max": 0.0,
-    }
+    optimizer.zero_grad(set_to_none=True)
     for _ in range(gradient_accumulation_steps):
         (
             latents,
             encoder_hidden_states,
-            latents_attention_mask,
+            _latents_attention_mask,
             encoder_attention_mask,
             caption,
         ) = next(loader)
@@ -139,17 +133,18 @@ def distill_one_step(
         ).long()
         if sp_size > 1:
             broadcast(index)
-        # Add noise according to flow matching.
-        # sigmas = get_sigmas(start_timesteps, n_dim=model_input.ndim, dtype=model_input.dtype)
         sigmas = extract_into_tensor(solver.sigmas, index, model_input.shape)
-        sigmas_prev = extract_into_tensor(solver.sigmas_prev, index, model_input.shape)
 
         timesteps = (sigmas * noise_scheduler.config.num_train_timesteps).view(-1)
-        # if squeeze to [], unsqueeze to [1]
 
-        timesteps_prev = (
-            sigmas_prev * noise_scheduler.config.num_train_timesteps
-        ).view(-1)
+        timesteps_prev = None
+        if use_consistency_loss:
+            sigmas_prev = extract_into_tensor(
+                solver.sigmas_prev, index, model_input.shape
+            )
+            timesteps_prev = (
+                sigmas_prev * noise_scheduler.config.num_train_timesteps
+            ).view(-1)
         noisy_model_input = sigmas * noise + (1.0 - sigmas) * model_input
         # Predict the noise residual
         with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -166,88 +161,99 @@ def distill_one_step(
                 )
             model_pred = transformer(**teacher_kwargs)[0]
 
-        # rank = int(os.getenv("RANK", 0))
-        # print(f"{rank}_{index}")
-        model_pred_0, end_index_0 = solver.euler_style_multiphase_pred_last_step(
-            noisy_model_input, model_pred, index, multiphase
-        )
+        global_loss = model_pred.new_zeros(())
+        finegrained_loss = model_pred.new_zeros(())
+        if use_video_reward_loss:
+            model_pred_0, _ = solver.euler_style_multiphase_pred_last_step(
+                noisy_model_input, model_pred, index, multiphase
+            )
 
-        latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
-        images_0 = vae.decode(latents_0, return_dict=False)[0]
-        images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
-        # image_rewards = image_reward_fn(images_0.squeeze(2), caption)
-        # image_loss = -image_rewards.mean() / gradient_accumulation_steps
+            latents_0 = model_pred_0.to(torch.float16) / vae.config.scaling_factor
+            images_0 = vae.decode(latents_0, return_dict=False)[0]
+            images_0 = (images_0 / 2 + 0.5).clamp(0, 1)
 
-        video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
-        global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
-        global_loss = -global_rewards.mean() / gradient_accumulation_steps
-        finegrained_loss = -finegrained_rewards.mean() / gradient_accumulation_steps
+            video_0 = all_gather(images_0, dim=2).permute(0, 2, 1, 3, 4)
 
-        # if accelerator.is_main_process:
-        model_pred, end_index = solver.euler_style_multiphase_pred(
-            noisy_model_input, model_pred, index, multiphase
-        )
+            global_rewards, finegrained_rewards = video_reward_fn(video_0, caption)
+            if use_global_reward_loss:
+                global_loss = -global_rewards.mean() / gradient_accumulation_steps
+            if use_finegrained_reward_loss:
+                finegrained_loss = (
+                    -finegrained_rewards.mean() / gradient_accumulation_steps
+                )
 
-        with torch.no_grad():
-            w = distill_cfg
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                cond_teacher_output = teacher_transformer(
-                    noisy_model_input,
-                    encoder_hidden_states,
-                    timesteps,
-                    encoder_attention_mask,  # B, L
-                    return_dict=False,
-                )[0].float()
-            if not_apply_cfg_solver:
-                uncond_teacher_output = cond_teacher_output
-            else:
-                # Get teacher model prediction on noisy_latents and unconditional embedding
+        distill_loss = model_pred.new_zeros(())
+        if use_consistency_loss or pred_decay_weight > 0:
+            model_pred, _ = solver.euler_style_multiphase_pred(
+                noisy_model_input, model_pred, index, multiphase
+            )
+
+        if use_consistency_loss:
+            with torch.no_grad():
+                w = distill_cfg
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    uncond_teacher_output = teacher_transformer(
+                    cond_teacher_output = teacher_transformer(
                         noisy_model_input,
-                        uncond_prompt_embed.unsqueeze(0).expand(bsz, -1, -1),
+                        encoder_hidden_states,
                         timesteps,
-                        uncond_prompt_mask.unsqueeze(0).expand(bsz, -1),
+                        encoder_attention_mask,  # B, L
                         return_dict=False,
                     )[0].float()
-            teacher_output = cond_teacher_output + w * (
-                cond_teacher_output - uncond_teacher_output
-            )
-            x_prev = solver.euler_step(noisy_model_input, teacher_output, index)
-
-        # 20.4.12. Get target LCM prediction on x_prev, w, c, t_n
-        with torch.no_grad():
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                if ema_transformer is not None:
-                    target_pred = ema_transformer(
-                        x_prev.float(),
-                        encoder_hidden_states,
-                        timesteps_prev,
-                        encoder_attention_mask,  # B, L
-                        return_dict=False,
-                    )[0]
+                if not_apply_cfg_solver:
+                    uncond_teacher_output = cond_teacher_output
                 else:
-                    target_pred = transformer(
-                        x_prev.float(),
-                        encoder_hidden_states,
-                        timesteps_prev,
-                        encoder_attention_mask,  # B, L
-                        return_dict=False,
-                    )[0]
+                    # Get teacher model prediction on noisy_latents and unconditional embedding
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        uncond_teacher_output = teacher_transformer(
+                            noisy_model_input,
+                            uncond_prompt_embed.unsqueeze(0).expand(bsz, -1, -1),
+                            timesteps,
+                            uncond_prompt_mask.unsqueeze(0).expand(bsz, -1),
+                            return_dict=False,
+                        )[0].float()
+                teacher_output = cond_teacher_output + w * (
+                    cond_teacher_output - uncond_teacher_output
+                )
+                x_prev = solver.euler_step(noisy_model_input, teacher_output, index)
 
-            target, end_index = solver.euler_style_multiphase_pred(
-                x_prev, target_pred, index, multiphase, True
-            )
+            with torch.no_grad():
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    if ema_transformer is not None:
+                        target_pred = ema_transformer(
+                            x_prev.float(),
+                            encoder_hidden_states,
+                            timesteps_prev,
+                            encoder_attention_mask,  # B, L
+                            return_dict=False,
+                        )[0]
+                    else:
+                        target_pred = transformer(
+                            x_prev.float(),
+                            encoder_hidden_states,
+                            timesteps_prev,
+                            encoder_attention_mask,  # B, L
+                            return_dict=False,
+                        )[0]
 
-        huber_c = 0.001
-        # loss = loss.mean()
-        distill_loss = (
-            torch.mean(
-                torch.sqrt((model_pred.float() - target.float()) ** 2 + huber_c**2)
-                - huber_c
+                target, _ = solver.euler_style_multiphase_pred(
+                    x_prev, target_pred, index, multiphase, True
+                )
+
+            huber_c = 0.001
+            distill_loss = (
+                torch.mean(
+                    torch.sqrt((model_pred.float() - target.float()) ** 2 + huber_c**2)
+                    - huber_c
+                )
+                / gradient_accumulation_steps
             )
-            / gradient_accumulation_steps
-        )
+        train_loss = model_pred.new_zeros(())
+        if use_consistency_loss:
+            train_loss = train_loss + consistency_loss_weight * distill_loss
+        if use_global_reward_loss:
+            train_loss = train_loss + global_reward_loss_weight * global_loss
+        if use_finegrained_reward_loss:
+            train_loss = train_loss + finegrained_reward_loss_weight * finegrained_loss
         if pred_decay_weight > 0:
             if pred_decay_type == "l1":
                 pred_decay_loss = (
@@ -255,35 +261,30 @@ def distill_one_step(
                     * pred_decay_weight
                     / gradient_accumulation_steps
                 )
-                loss += pred_decay_loss
+                train_loss = train_loss + pred_decay_loss
             elif pred_decay_type == "l2":
-                # essnetially k2?
                 pred_decay_loss = (
                     torch.mean(model_pred.float() ** 2)
                     * pred_decay_weight
                     / gradient_accumulation_steps
                 )
-                loss += pred_decay_loss
+                train_loss = train_loss + pred_decay_loss
             else:
-                assert NotImplementedError("pred_decay_type is not implemented")
+                raise NotImplementedError(
+                    f"Unsupported prediction decay type: {pred_decay_type}"
+                )
 
-        # calculate model_pred norm and mean
-        # get_norm(
-        #     model_pred.detach().float(), model_pred_norm, gradient_accumulation_steps
-        # )
-        (distill_loss + 0.1 * global_loss + 0.1 * finegrained_loss).backward()
-        # (distill_loss + global_loss + finegrained_loss).backward()
-        # (distill_loss + global_loss).backward()
+        if not train_loss.requires_grad:
+            raise RuntimeError("No active differentiable loss selected for training.")
+        train_loss.backward()
 
-        # distill_loss.backward()
+        avg_train_loss = train_loss.detach().clone()
+        dist.all_reduce(avg_train_loss, op=dist.ReduceOp.AVG)
+        total_train_loss += avg_train_loss.item()
 
         avg_distill_loss = distill_loss.detach().clone()
         dist.all_reduce(avg_distill_loss, op=dist.ReduceOp.AVG)
         total_distill_loss += avg_distill_loss.item()
-
-        # avg_image_loss = image_loss.detach().clone()
-        # dist.all_reduce(avg_image_loss, op=dist.ReduceOp.AVG)
-        # total_image_loss += avg_image_loss.item()
 
         avg_global_loss = global_loss.detach().clone()
         dist.all_reduce(avg_global_loss, op=dist.ReduceOp.AVG)
@@ -292,7 +293,6 @@ def distill_one_step(
         avg_finegrained_loss = finegrained_loss.detach().clone()
         dist.all_reduce(avg_finegrained_loss, op=dist.ReduceOp.AVG)
         total_finegrained_loss += avg_finegrained_loss.item()
-    # update ema
     if ema_transformer is not None:
         reshard_fsdp(ema_transformer)
         for p_averaged, p_model in zip(
@@ -302,82 +302,31 @@ def distill_one_step(
                 p_averaged.copy_(
                     torch.lerp(p_averaged.detach(), p_model.detach(), 1 - ema_decay)
                 )
-    # ---------------- NaN / Inf diagnostics BEFORE clipping -----------------
-    debug_nan = False  # flip to False to disable extra checks
-    if debug_nan:
-        rank = dist.get_rank() if dist.is_initialized() else 0
-        # Check individual loss components
-        for name_, val_ in {
-            "total_distill_loss_step_mean": total_distill_loss
-            / max(1, gradient_accumulation_steps),
-            "total_global_loss_step_mean": total_global_loss
-            / max(1, gradient_accumulation_steps),
-            "total_finegrained_loss_step_mean": total_finegrained_loss
-            / max(1, gradient_accumulation_steps),
-        }.items():
-            if not math.isfinite(val_):
-                if rank == 0:
-                    print(
-                        f"[NaN DEBUG] Non-finite aggregated loss component {name_}: {val_}"
-                    )
-        # Per-parameter grad scan (only rank 0 to avoid spam)
-        if rank == 0:
-            found_bad = False
-            with torch.no_grad():
-                for mod in FSDP.fsdp_modules(transformer):
-                    for name, p in mod.named_parameters(recurse=False):
-                        if p.grad is None:
-                            continue
-                        if torch.isnan(p.grad).any() or torch.isinf(p.grad).any():
-                            found_bad = True
-                            g = p.grad
-                            print(
-                                f"[NaN DEBUG] Detected non-finite grad in param '{name}': shape={g.shape} dtype={g.dtype} max_abs={g.abs().max().item():.3e} min={g.min().item():.3e} max={g.max().item():.3e}"
-                            )
-                            break
-                    if found_bad:
-                        break
-            if found_bad:
-                # Optional: zero bad grads to let training proceed rather than crashing
-                print(
-                    "[NaN DEBUG] Zeroing non-finite gradients to continue (consider investigating upstream)."
-                )
-                for mod in FSDP.fsdp_modules(transformer):
-                    for p in mod.parameters():
-                        if p.grad is not None and (
-                            torch.isnan(p.grad).any() or torch.isinf(p.grad).any()
-                        ):
-                            p.grad = torch.nan_to_num(
-                                p.grad, nan=0.0, posinf=0.0, neginf=0.0
-                            )
-    # ------------------------------------------------------------------------
-
     grad_norm = transformer.clip_grad_norm_(max_grad_norm)
-    if debug_nan and (not math.isfinite(grad_norm)):  # Re-check after clipping
-        rank = dist.get_rank() if dist.is_initialized() else 0
-        if rank == 0:
-            print(
-                "[NaN DEBUG] grad_norm became non-finite AFTER clipping. Investigate earlier prints."
-            )
     optimizer.step()
     lr_scheduler.step()
 
     return (
+        total_train_loss,
         total_distill_loss,
-        total_image_loss,
         total_global_loss,
         total_finegrained_loss,
         grad_norm.item(),
-        model_pred_norm,
     )
 
 
 def main(args):
+    validate_training_args(args)
     torch.backends.cuda.matmul.allow_tf32 = True
 
     local_rank = int(os.environ["LOCAL_RANK"])
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
+    if world_size % args.sp_size != 0:
+        raise ValueError(
+            f"WORLD_SIZE ({world_size}) must be divisible by --sp_size "
+            f"({args.sp_size})."
+        )
     dist.init_process_group("nccl")
     torch.cuda.set_device(local_rank)
     device = torch.cuda.current_device()
@@ -387,9 +336,6 @@ def main(args):
     if args.seed is not None:
         # TODO: t within the same seq parallel group should be the same. Noise should be different.
         set_seed(args.seed + rank)
-    # We use different seeds for the noise generation in each process to ensure that the noise is different in a batch.
-    noise_random_generator = None
-
     # Handle the repository creation
     if rank <= 0 and args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
@@ -401,12 +347,39 @@ def main(args):
 
     main_print(f"--> loading model from {args.pretrained_model_name_or_path}")
 
-    vae, _, _, _ = load_vae(
-        vae_type="884-16c-hy",
-        vae_precision="fp16",
-        device=device,
-        vae_path=f"{args.pretrained_model_name_or_path}/hunyuan-video-t2v-720p/vae",
+    use_video_reward_loss = (
+        args.use_global_reward_loss or args.use_finegrained_reward_loss
     )
+    vae = None
+    if use_video_reward_loss:
+        vae, _, vae_spatial_compression_ratio, _ = load_vae(
+            vae_type="884-16c-hy",
+            vae_precision="fp16",
+            device=device,
+            vae_path=(
+                f"{args.pretrained_model_name_or_path}/"
+                "hunyuan-video-t2v-720p/vae"
+            ),
+        )
+        if args.vae_tiling:
+            vae.enable_tiling()
+            vae.tile_sample_min_size = args.vae_tile_sample_size
+            vae.tile_latent_min_size = (
+                args.vae_tile_sample_size // vae_spatial_compression_ratio
+            )
+            main_print(
+                "--> enabled VAE tiling: "
+                f"tile_sample_min_size={vae.tile_sample_min_size}, "
+                f"tile_latent_min_size={vae.tile_latent_min_size}"
+            )
+        if args.vae_decode_checkpointing:
+            if not hasattr(vae, "decoder"):
+                raise ValueError(
+                    "The selected VAE does not expose a checkpointable decoder."
+                )
+            vae.decoder.gradient_checkpointing = True
+            vae.decoder.train()
+            main_print("--> enabled block-level VAE decoder checkpointing")
 
     transformer = load_transformer(
         args.model_type,
@@ -415,65 +388,84 @@ def main(args):
         torch.float32 if args.master_weight_type == "fp32" else torch.bfloat16,
     )
 
-    teacher_transformer = deepcopy(transformer)
+    teacher_transformer = deepcopy(transformer) if args.use_consistency_loss else None
 
-    image_reward_fn = get_reward_fn("hpsv2", precision="fp16")
-    video_reward_fn = get_reward_fn(
-        "vi_clip2_OT",
-        precision="fp16",
-        rm_ckpt_dir="/mnt/iftekhar/minhquan-local/InternVideo2-Stage2_1B-224p-f4/InternVideo2-stage2_1b-224p-f4.pt",
-        OT_map_ckpt_dir="/media/minhquan/hummingbird-video/OT_maps_v1/OT_map_156000.pt",
-        n_frames=8,
+    video_reward_fn = None
+    if use_video_reward_loss:
+        video_reward_fn = get_reward_fn(
+            "vi_clip2",
+            precision="fp16",
+            rm_ckpt_dir=args.reward_model_ckpt_dir,
+            OT_map_ckpt_dir=args.ot_map_ckpt_dir,
+            n_frames=args.reward_num_frames,
+            use_ot=args.use_ot_reward,
+            use_pot_tokens=args.use_finegrained_reward_loss,
+        )
+    main_print(
+        "--> Ablation settings: "
+        f"consistency_loss={args.use_consistency_loss} "
+        f"(w={args.consistency_loss_weight}), "
+        f"global_reward={args.use_global_reward_loss} "
+        f"(w={args.global_reward_loss_weight}), "
+        f"finegrained_reward={args.use_finegrained_reward_loss} "
+        f"(w={args.finegrained_reward_loss_weight}), "
+        f"ot_reward={args.use_ot_reward and use_video_reward_loss}"
     )
-    if args.use_ema:
-        ema_transformer = deepcopy(transformer)
-    else:
-        ema_transformer = None
-
     if args.use_lora:
-        assert args.model_type == "mochi", "LoRA is only supported for Mochi model."
+        lora_target_modules = get_lora_target_modules(
+            args.model_type, args.lora_target_modules
+        )
         transformer.requires_grad_(False)
         transformer_lora_config = LoraConfig(
             r=args.lora_rank,
             lora_alpha=args.lora_alpha,
             init_lora_weights=True,
-            target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+            target_modules=lora_target_modules,
         )
-        transformer.add_adapter(transformer_lora_config)
+        if hasattr(transformer, "add_adapter"):
+            transformer.add_adapter(transformer_lora_config)
+        else:
+            transformer = get_peft_model(transformer, transformer_lora_config)
+        transformer.config.lora_rank = args.lora_rank
+        transformer.config.lora_alpha = args.lora_alpha
+        transformer.config.lora_target_modules = lora_target_modules
+        main_print(f"--> Using LoRA target modules: {lora_target_modules}")
+
+    ema_transformer = deepcopy(transformer) if args.use_ema else None
 
     main_print(
         f"  Total training parameters = {sum(p.numel() for p in transformer.parameters() if p.requires_grad) / 1e6} M"
     )
     main_print(
-        f"--> Initializing FSDP with sharding strategy: {args.fsdp_sharding_startegy}"
-    )
-    fsdp_kwargs, no_split_modules = get_dit_fsdp_kwargs(
-        transformer,
-        args.fsdp_sharding_startegy,
-        args.use_lora,
-        args.use_cpu_offload,
-        args.master_weight_type,
+        "--> Initializing FSDP with sharding strategy: "
+        f"{args.fsdp_sharding_strategy}"
     )
 
-    if args.use_lora:
-        transformer.config.lora_rank = args.lora_rank
-        transformer.config.lora_alpha = args.lora_alpha
-        transformer.config.lora_target_modules = ["to_k", "to_q", "to_v", "to_out.0"]
-        transformer._no_split_modules = no_split_modules
-        fsdp_kwargs["auto_wrap_policy"] = fsdp_kwargs["auto_wrap_policy"](transformer)
+    def wrap_with_fsdp(model, use_lora):
+        fsdp_kwargs, no_split_modules = get_dit_fsdp_kwargs(
+            model,
+            args.fsdp_sharding_strategy,
+            use_lora,
+            args.use_cpu_offload,
+            args.master_weight_type,
+        )
+        if use_lora:
+            model._no_split_modules = [
+                module.__name__ for module in no_split_modules
+            ]
+            fsdp_kwargs["auto_wrap_policy"] = fsdp_kwargs["auto_wrap_policy"](model)
+        return FSDP(model, **fsdp_kwargs), no_split_modules
 
-    transformer = FSDP(
-        transformer,
-        **fsdp_kwargs,
-    )
-    teacher_transformer = FSDP(
-        teacher_transformer,
-        **fsdp_kwargs,
-    )
+    transformer, no_split_modules = wrap_with_fsdp(transformer, args.use_lora)
+    teacher_no_split_modules = no_split_modules
+    if args.use_consistency_loss:
+        teacher_transformer, teacher_no_split_modules = wrap_with_fsdp(
+            teacher_transformer, False
+        )
+    ema_no_split_modules = no_split_modules
     if args.use_ema:
-        ema_transformer = FSDP(
-            ema_transformer,
-            **fsdp_kwargs,
+        ema_transformer, ema_no_split_modules = wrap_with_fsdp(
+            ema_transformer, args.use_lora
         )
     main_print("--> model loaded")
 
@@ -481,19 +473,27 @@ def main(args):
         apply_fsdp_checkpointing(
             transformer, no_split_modules, args.selective_checkpointing
         )
-        apply_fsdp_checkpointing(
-            teacher_transformer, no_split_modules, args.selective_checkpointing
-        )
+        if args.use_consistency_loss:
+            apply_fsdp_checkpointing(
+                teacher_transformer,
+                teacher_no_split_modules,
+                args.selective_checkpointing,
+            )
         if args.use_ema:
             apply_fsdp_checkpointing(
-                ema_transformer, no_split_modules, args.selective_checkpointing
+                ema_transformer,
+                ema_no_split_modules,
+                args.selective_checkpointing,
             )
     # Set model as trainable.
     transformer.train()
-    teacher_transformer.requires_grad_(False)
+    if args.use_consistency_loss:
+        teacher_transformer.requires_grad_(False)
+        teacher_transformer.eval()
 
     if args.use_ema:
         ema_transformer.requires_grad_(False)
+        ema_transformer.eval()
     noise_scheduler = FlowMatchEulerDiscreteScheduler(shift=args.shift)
     if args.scheduler_type == "pcm_linear_quadratic":
         linear_steps = int(
@@ -603,20 +603,19 @@ def main(args):
     main_print(
         f"  Total training parameters per FSDP shard = {sum(p.numel() for p in transformer.parameters() if p.requires_grad) / 1e9} B"
     )
-    # print dtype
     main_print(f"  Master weight dtype: {transformer.parameters().__next__().dtype}")
 
-    # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
-        assert NotImplementedError("resume_from_checkpoint is not supported now.")
-        # TODO
+        raise NotImplementedError(
+            "--resume_from_checkpoint is not supported by direct PISCES "
+            "post-training yet."
+        )
 
     progress_bar = tqdm(
         range(0, args.max_train_steps),
         initial=init_steps,
         desc="Steps",
-        # Only show the progress bar once on each machine.
-        disable=local_rank > 0,
+        disable=rank > 0,
     )
 
     loader = sp_parallel_dataloader_wrapper(
@@ -633,8 +632,6 @@ def main(args):
     for i in range(init_steps):
         next(loader)
 
-    # log_validation(args, transformer, device,
-    #             torch.bfloat16, 0, scheduler_type=args.scheduler_type, shift=args.shift, num_euler_timesteps=args.num_euler_timesteps, linear_quadratic_threshold=args.linear_quadratic_threshold,ema=False)
     def get_num_phases(multi_phased_distill_schedule, step):
         # step-phase,step-phase
         multi_phases = multi_phased_distill_schedule.split(",")
@@ -651,26 +648,23 @@ def main(args):
         num_phases = get_num_phases(args.multi_phased_distill_schedule, step)
 
         (
+            train_loss,
             distill_loss,
-            image_loss,
             global_loss,
             finegrained_loss,
             grad_norm,
-            pred_norm,
         ) = distill_one_step(
             transformer,
             args.model_type,
             teacher_transformer,
             ema_transformer,
             vae,
-            image_reward_fn,
             video_reward_fn,
             optimizer,
             lr_scheduler,
             loader,
             noise_scheduler,
             solver,
-            noise_random_generator,
             args.gradient_accumulation_steps,
             args.sp_size,
             args.max_grad_norm,
@@ -684,6 +678,12 @@ def main(args):
             args.pred_decay_weight,
             args.pred_decay_type,
             args.hunyuan_teacher_disable_cfg,
+            args.use_consistency_loss,
+            args.use_global_reward_loss,
+            args.use_finegrained_reward_loss,
+            args.consistency_loss_weight,
+            args.global_reward_loss_weight,
+            args.finegrained_reward_loss_weight,
         )
 
         step_time = time.time() - start_time
@@ -692,7 +692,8 @@ def main(args):
 
         progress_bar.set_postfix(
             {
-                "loss": f"{distill_loss:.4f}",
+                "loss": f"{train_loss:.4f}",
+                "distill": f"{distill_loss:.4f}",
                 "step_time": f"{step_time:.2f}s",
                 "grad_norm": grad_norm,
                 "phases": num_phases,
@@ -702,18 +703,14 @@ def main(args):
         if rank <= 0:
             wandb.log(
                 {
+                    "train_loss": train_loss,
                     "distill_loss": distill_loss,
-                    "image_reward": -1.0 * image_loss,
                     "global_reward": -1.0 * global_loss,
                     "finegrained_reward": -1.0 * finegrained_loss,
                     "learning_rate": lr_scheduler.get_last_lr()[0],
                     "step_time": step_time,
                     "avg_step_time": avg_step_time,
                     "grad_norm": grad_norm,
-                    "pred_fro_norm": pred_norm["fro"],  # codespell:ignore
-                    "pred_largest_singular_value": pred_norm["largest singular value"],
-                    "pred_absolute_mean": pred_norm["absolute mean"],
-                    "pred_absolute_max": pred_norm["absolute max"],
                 },
                 step=step,
             )
@@ -764,7 +761,8 @@ def main(args):
             transformer, optimizer, rank, args.output_dir, args.max_train_steps
         )
     else:
-        save_checkpoint(transformer, rank, args.output_dir, args.max_train_steps)
+        model_to_save = ema_transformer if args.use_ema else transformer
+        save_checkpoint(model_to_save, rank, args.output_dir, args.max_train_steps)
 
     if get_sequence_parallel_state():
         destroy_sequence_parallel_group()
@@ -815,7 +813,7 @@ if __name__ == "__main__":
     parser.add_argument("--validation_sampling_steps", type=str, default="64")
     parser.add_argument("--validation_guidance_scale", type=str, default="4.5")
 
-    parser.add_argument("--validation_steps", type=float, default=64)
+    parser.add_argument("--validation_steps", type=int, default=64)
     parser.add_argument("--log_validation", action="store_true")
     parser.add_argument("--tracker_project_name", type=str, default=None)
     parser.add_argument(
@@ -958,7 +956,27 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lora_rank", type=int, default=128, help="LoRA rank parameter. "
     )
-    parser.add_argument("--fsdp_sharding_startegy", default="full")
+    parser.add_argument(
+        "--lora_target_modules",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated LoRA target module suffixes. Defaults to fused "
+            "Hunyuan attention/projection layers for model_type=hunyuan and "
+            "Diffusers attention projections otherwise."
+        ),
+    )
+    parser.add_argument(
+        "--fsdp_sharding_strategy",
+        "--fsdp_sharding_startegy",
+        dest="fsdp_sharding_strategy",
+        default="full",
+        choices=["full", "hybrid_full", "none", "hybrid_zero2"],
+        help=(
+            "FSDP sharding strategy. The misspelled "
+            "--fsdp_sharding_startegy name remains as a compatibility alias."
+        ),
+    )
 
     # lr_scheduler
     parser.add_argument(
@@ -1016,9 +1034,67 @@ if __name__ == "__main__":
     parser.add_argument("--pred_decay_type", default="l1")
     parser.add_argument("--hunyuan_teacher_disable_cfg", action="store_true")
     parser.add_argument(
+        "--reward_model_ckpt_dir",
+        type=str,
+        default="pretrained/InternVideo2-stage2_1b-224p-f4.pt",
+        help="Path to the InternVideo2 reward model checkpoint.",
+    )
+    parser.add_argument(
+        "--ot_map_ckpt_dir",
+        type=str,
+        default="pretrained/OT_map_156000.pt",
+        help="Path to the OT map checkpoint used when OT reward is enabled.",
+    )
+    parser.add_argument(
+        "--reward_num_frames",
+        type=int,
+        default=26,
+        help="Number of frames expected by the video reward model.",
+    )
+    parser.add_argument(
+        "--vae_tiling",
+        action="store_true",
+        help="Enable tiled VAE decode for lower memory reward decoding.",
+    )
+    parser.add_argument(
+        "--vae_tile_sample_size",
+        type=int,
+        default=256,
+        help="Spatial VAE tile size before compression when VAE tiling is enabled.",
+    )
+    parser.add_argument(
+        "--vae_decode_checkpointing",
+        action="store_true",
+        help="Checkpoint VAE decode activations while keeping reward gradients.",
+    )
+    parser.add_argument(
+        "--use_consistency_loss",
+        action="store_true",
+        help="Include consistency distillation loss in the training objective.",
+    )
+    parser.add_argument(
+        "--use_global_reward_loss",
+        action="store_true",
+        help="Include the global video reward loss in the training objective.",
+    )
+    parser.add_argument(
+        "--use_finegrained_reward_loss",
+        action="store_true",
+        help="Include the finegrained video reward loss in the training objective.",
+    )
+    parser.add_argument(
+        "--use_ot_reward",
+        action="store_true",
+        help="Use the OT reward head for InternVideo2 rewards.",
+    )
+    parser.add_argument("--consistency_loss_weight", type=float, default=1.0)
+    parser.add_argument("--global_reward_loss_weight", type=float, default=1.0)
+    parser.add_argument("--finegrained_reward_loss_weight", type=float, default=1.0)
+    parser.add_argument(
         "--master_weight_type",
         type=str,
         default="fp32",
+        choices=["fp32", "bf16"],
         help="Weight type to use - fp32 or bf16.",
     )
     args = parser.parse_args()

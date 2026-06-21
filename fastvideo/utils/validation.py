@@ -252,7 +252,7 @@ def log_validation(
     for validation_sampling_step in args.validation_sampling_steps.split(","):
         validation_sampling_step = int(validation_sampling_step)
         for validation_guidance_scale in validation_guidance_scale_ls:
-            videos = []
+            local_videos = []
             # prompt_embed are named embed0 to embedN
             # check how many embeds are there
             embe_dir = os.path.join(args.validation_prompt_dir, "prompt_embed")
@@ -261,22 +261,25 @@ def log_validation(
             embeds = sorted([f for f in os.listdir(embe_dir)])
             masks = sorted([f for f in os.listdir(mask_dir)])
             num_embeds = len(embeds)
-            validation_prompt_ids = list(range(num_embeds))
+            validation_prompt_ids = [(prompt_id, True)
+                                     for prompt_id in range(num_embeds)]
             num_sp_groups = int(os.getenv("WORLD_SIZE",
                                           "1")) // nccl_info.sp_size
             # pad to multiple of groups
             if num_embeds % num_sp_groups != 0:
-                validation_prompt_ids += [0] * (num_sp_groups -
-                                                num_embeds % num_sp_groups)
+                validation_prompt_ids += [(0, False)] * (
+                    num_sp_groups - num_embeds % num_sp_groups)
             num_embeds_per_group = len(validation_prompt_ids) // num_sp_groups
-            local_prompt_ids = validation_prompt_ids[nccl_info.group_id *
-                                                     num_embeds_per_group:
-                                                     (nccl_info.group_id + 1) *
-                                                     num_embeds_per_group]
+            local_prompt_ids = validation_prompt_ids[
+                nccl_info.group_id * num_embeds_per_group:(nccl_info.group_id +
+                                                           1) *
+                num_embeds_per_group]
 
-            for i in local_prompt_ids:
-                prompt_embed_path = os.path.join(embe_dir, f"{embeds[i]}")
-                prompt_mask_path = os.path.join(mask_dir, f"{masks[i]}")
+            for prompt_id, is_real_prompt in local_prompt_ids:
+                prompt_embed_path = os.path.join(embe_dir,
+                                                 f"{embeds[prompt_id]}")
+                prompt_mask_path = os.path.join(mask_dir,
+                                                f"{masks[prompt_id]}")
                 prompt_embeds = (torch.load(
                     prompt_embed_path, map_location="cpu",
                     weights_only=True).to(device).unsqueeze(0))
@@ -309,31 +312,36 @@ def log_validation(
                     vae_temporal_scale_factor=vae_temporal_scale_factor,
                     num_channels_latents=num_channels_latents,
                 )[0]
-                if nccl_info.rank_within_group == 0:
-                    videos.append(video[0])
-            # collect videos from all process to process zero
+                if nccl_info.rank_within_group == 0 and is_real_prompt:
+                    local_videos.append((prompt_id, video[0]))
 
             gc.collect()
             torch.cuda.empty_cache()
-            # log if main process
             torch.distributed.barrier()
-            all_videos = [
-                None for i in range(int(os.getenv("WORLD_SIZE", "1")))
-            ]  # remove padded videos
-            # torch.distributed.all_gather_object(all_videos, videos)
-            if nccl_info.global_rank == 0:
-                # remove padding
-                # videos = [video for videos in all_videos for video in videos]
-                videos = videos[:num_embeds]
-                # linearize all videos
-                video_filenames = []
-                for i, video in enumerate(videos):
+
+            video_filenames = []
+            if nccl_info.rank_within_group == 0:
+                os.makedirs(args.output_dir, exist_ok=True)
+                for prompt_id, video in local_videos:
                     filename = os.path.join(
                         args.output_dir,
-                        f"validation_step_{global_step}_sample_{validation_sampling_step}_guidance_{validation_guidance_scale}_video_{i}.mp4",
+                        f"validation_step_{global_step}_sample_{validation_sampling_step}_guidance_{validation_guidance_scale}_prompt_{prompt_id}.mp4",
                     )
                     export_to_video(video, filename, fps=fps)
                     video_filenames.append(filename)
+
+            gathered_video_filenames = [
+                None for _ in range(int(os.getenv("WORLD_SIZE", "1")))
+            ]
+            torch.distributed.all_gather_object(gathered_video_filenames,
+                                                video_filenames)
+            if nccl_info.global_rank == 0:
+                video_filenames = [
+                    filename
+                    for filenames in gathered_video_filenames
+                    for filename in filenames
+                ]
+                video_filenames = sorted(video_filenames)
 
                 logs = {
                     f"{'ema_' if ema else ''}validation_sample_{validation_sampling_step}_guidance_{validation_guidance_scale}":

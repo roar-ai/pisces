@@ -1,26 +1,22 @@
-import numpy as np
-import cv2
-import os
-import io
 import gc
+import os
 
+import cv2
+import numpy as np
 import torch
 from torch import nn
 
-from fastvideo.intern_vid2.models.backbones.internvideo2 import (
-    pretrain_internvideo2_1b_patch14_224,
-)
 from fastvideo.intern_vid2.models.backbones.bert.builder import build_bert
-from fastvideo.intern_vid2.models.criterions import (
-    MLMLoss,
-    VTC_VTM_Loss,
-    get_sim,
-    new_UTA_Loss,
+from fastvideo.intern_vid2.models.backbones.bert.tokenization_bert import (
+    BertTokenizer,
 )
 from fastvideo.intern_vid2.models.backbones.internvideo2.pos_embed import (
     interpolate_pos_embed_internvideo2_new,
 )
-from fastvideo.intern_vid2.models.backbones.bert.tokenization_bert import BertTokenizer
+from fastvideo.intern_vid2.models.backbones.internvideo2 import (
+    pretrain_internvideo2_1b_patch14_224,
+)
+from fastvideo.intern_vid2.models.criterions import VTC_VTM_Loss
 
 # from intern_vid2.models.internvideo2_stage2 import InternVideo2_Stage2
 
@@ -414,18 +410,8 @@ class InternVideo2_Stage2_Rewards(nn.Module):
         self.text_proj = nn.Linear(self.text_width, self.embed_dim)
 
         self.temp = 0.0120
-        # self.temp = nn.parameter.Parameter(torch.ones([]) * config.model.temp)
         self.itm_head = nn.Linear(self.text_width, 2)
-
-        # criterions
-        # self.criterion_uta = new_UTA_Loss(
-        #     config.criterion.distill_final_features,
-        #     config.criterion.clip_loss_ratio,
-        # )
         self.criterion_vtc_vtm = VTC_VTM_Loss()
-        # self.criterion_mlm = MLMLoss(config.criterion.mlm_masking_prob, tokenizer)
-        # self.uta_image_only = config.criterion.get("uta_image_only", False)
-        # logger.info(f"uta_image_only={self.uta_image_only}")
 
     def freeze_vision(self):
         """freeze vision encoder"""
@@ -453,43 +439,22 @@ class InternVideo2_Stage2_Rewards(nn.Module):
         return self.vision_encoder.patch_embed.proj.weight.dtype
 
     def reward(self, image, text, idx, media_type="image"):
-        """forward and calculate loss.
+        """Compute vanilla InternVideo2 global and semantic rewards."""
+        del media_type
 
-        Args:
-            image (torch.Tensor): The input images. Shape: [B,T,C,H,W].
-            text (dict)
-            idx (torch.Tensor)
-            media_type: str
-        Returns:
-
-        """
-
-        # self.clip_contrastive_temperature()
-        T = image.shape[1]
-        use_image = True if T == 1 else False
-
-        (
-            vision_embeds,
-            pooled_vision_embeds,
-            # student_output,
-            # student_output_final,
-            # targets_clip_middle_vis,
-            # targets_clip_final_vis,
-        ) = self.encode_vision(image, test=True)
+        vision_embeds, pooled_vision_embeds = self.encode_vision(
+            image, test=True
+        )[:2]
 
         with torch.no_grad():
             text_embeds, pooled_text_embeds = self.encode_text(text)
             text_proj = self.text_proj(pooled_text_embeds)
 
-        # obtain vision and text representations.
         vision_proj = self.vision_proj(pooled_vision_embeds)
-        # calculate loss
-        ## VTC loss
-        loss_vtc = self.criterion_vtc_vtm.vtc_loss(
+        global_reward = self.criterion_vtc_vtm.vtc_loss(
             vision_proj, text_proj, idx, self.temp, all_gather=False
         )
-        ## VTM loss
-        loss_vtm = self.criterion_vtc_vtm.vtm_loss(
+        semantic_reward = self.criterion_vtc_vtm.vtm_loss(
             self.get_text_encoder(),
             self.itm_head,
             self.temp,
@@ -500,7 +465,7 @@ class InternVideo2_Stage2_Rewards(nn.Module):
             text.attention_mask,
             idx,
         )
-        return loss_vtc, loss_vtm
+        return global_reward, semantic_reward
 
     def reward_OT(
         self,
@@ -512,43 +477,35 @@ class InternVideo2_Stage2_Rewards(nn.Module):
         use_pot_tokens=False,
         media_type="image",
     ):
-        """forward and calculate loss.
+        """Compute the two PISCES OT-aligned rewards.
 
         Args:
-            image (torch.Tensor): The input images. Shape: [B,T,C,H,W].
-            text (dict)
-            idx (torch.Tensor)
-            media_type: str
+            OT_map: Frozen neural map from global text to video embeddings.
+            image: Generated video tensor shaped ``[B, T, C, H, W]``.
+            text: Tokenized caption batch.
+            valid_tokens: Lexical-token indices used by token-level POT.
+            use_pot_tokens: Inject POT into InternVideo2 cross-attention.
+
         Returns:
-
+            ``(quality_reward, semantic_reward)``. The first compares global
+            OT-aligned embeddings; the second is the positive VTM probability
+            after optional POT-guided attention fusion.
         """
+        del media_type
 
-        # self.clip_contrastive_temperature()
-        T = image.shape[1]
-        use_image = True if T == 1 else False
-
-        (
-            vision_embeds,
-            pooled_vision_embeds,
-            # student_output,
-            # student_output_final,
-            # targets_clip_middle_vis,
-            # targets_clip_final_vis,
-        ) = self.encode_vision(image, test=True)
+        vision_embeds, pooled_vision_embeds = self.encode_vision(
+            image, test=True
+        )[:2]
 
         with torch.no_grad():
             text_embeds, pooled_text_embeds = self.encode_text(text)
             text_proj = self.text_proj(pooled_text_embeds)
 
-        # obtain vision and text representations.
         vision_proj = self.vision_proj(pooled_vision_embeds)
-        # calculate loss
-        ## VTC loss
-        loss_vtc = self.criterion_vtc_vtm.vtc_loss_OT(
+        quality_reward = self.criterion_vtc_vtm.vtc_loss_OT(
             OT_map, vision_proj, text_proj, idx, self.temp, all_gather=False
         )
-        ## VTM loss
-        loss_vtm = self.criterion_vtc_vtm.vtm_loss(
+        semantic_reward = self.criterion_vtc_vtm.vtm_loss(
             self.get_text_encoder(),
             self.itm_head,
             self.temp,
@@ -561,7 +518,7 @@ class InternVideo2_Stage2_Rewards(nn.Module):
             valid_tokens=valid_tokens,
             use_pot_tokens=use_pot_tokens,
         )
-        return loss_vtc, loss_vtm
+        return quality_reward, semantic_reward
 
     def forward(self, image, text, idx, media_type="image"):
         """forward and calculate loss.

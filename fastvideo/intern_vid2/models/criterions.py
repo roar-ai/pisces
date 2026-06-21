@@ -123,7 +123,6 @@ class VTC_VTM_Loss(nn.Module):
 
     def __init__(self):
         super().__init__()
-        # self.vtm_hard_neg = vtm_hard_neg
 
     def vtc_loss_OT(
         self,
@@ -135,18 +134,7 @@ class VTC_VTM_Loss(nn.Module):
         all_gather=True,
         agg_method="mean",
     ):
-        """forward to calculate the loss
-
-        Args:
-            vision_proj (torch.Tensor): The vision representation. Shape: [B,T,C].
-            text_proj (torch.Tensor): The text representation. Shape: [B,C].
-            idx (torch.Tensor): The index for each example. Shape: [B,].
-            temp (torch.Tensor): The temperature. Shape: [].
-            all_gather (bool): If true, will gather samples across all the GPUs and calculate loss across the gathered samples.
-
-        Returns: loss_vtc (torch.Tensor): The video-text contrastive loss. Shape: [].
-
-        """
+        """Return the global quality reward in the OT-aligned embedding space."""
         if all_gather:
             gather_args = self.get_gather_args()
             vision_proj = allgather_wgrad(vision_proj, gather_args)
@@ -169,16 +157,6 @@ class VTC_VTM_Loss(nn.Module):
             )
             / sim_v2t.shape[0]
         )
-
-        loss_i2t = -torch.sum(
-            F.log_softmax(sim_v2t, dim=1) * sim_v2t_targets, dim=1
-        ).mean()
-        loss_t2i = -torch.sum(
-            F.log_softmax(sim_t2v, dim=1) * sim_t2v_targets, dim=1
-        ).mean()
-
-        loss_vtc = (loss_i2t + loss_t2i) / 2
-        return loss_vtc
 
     def vtc_loss(
         self,
@@ -222,16 +200,6 @@ class VTC_VTM_Loss(nn.Module):
             / sim_v2t.shape[0]
         )
 
-        loss_i2t = -torch.sum(
-            F.log_softmax(sim_v2t, dim=1) * sim_v2t_targets, dim=1
-        ).mean()
-        loss_t2i = -torch.sum(
-            F.log_softmax(sim_t2v, dim=1) * sim_t2v_targets, dim=1
-        ).mean()
-
-        loss_vtc = (loss_i2t + loss_t2i) / 2
-        return loss_vtc
-
     def vtm_loss(
         self,
         multimodal_encoder,
@@ -246,70 +214,17 @@ class VTC_VTM_Loss(nn.Module):
         valid_tokens=None,
         use_pot_tokens=False,
     ):
-        """video-text matching loss.
+        """Return the InternVideo2 positive video-text matching probability.
 
-        Args:
-            multinomial_encoder (nn.Module): The multimodal_encoder.
-            vtm_head (nn.Module): The head to produce the video-text matching score.
-            temp (torch.Tensor): temporature for similarity calculation.
-            vision_embeds (torch.Tensor): The features of all patches in the video. Shape: [B,T,L,C].
-            text_embeds (torch.Tensor): The features of all tokens in the text. Shape: [B,L,C].
-            vision_proj (torch.Tensor): The vision representation. Shape: [B,T,C].
-            text_proj (torch.Tensor): The text representation. Shape: [B,C].
-            text_atts (torch.Tensor): The padded mask for text tokens. 0 is padded. Shape: [B,L].
-            idx (torch.Tensor): The index for each example. Shape: [B,].
-
-        Returns: TODO
-
+        With ``use_pot_tokens=True``, the multimodal encoder injects a detached
+        POT structural prior into cross-attention before applying the existing
+        VTM classification head.
         """
+        del temp, vision_proj, text_proj, idx
         with torch.no_grad():
-            # sim_v2t, sim_t2v = get_sim(vision_proj, text_proj, temp)
             vision_atts = torch.ones(
                 vision_embeds.size()[:-1], dtype=torch.long, device=vision_embeds.device
             )
-            # weights_v2t = F.softmax(sim_v2t + 1e-4, dim=1)  # (N, N)
-            # weights_t2v = F.softmax(sim_t2v + 1e-4, dim=1)
-
-            # mask = self.get_mask(sim_v2t, idx=idx).bool()
-            # weights_v2t.masked_fill_(mask, 0)
-            # weights_t2v.masked_fill_(mask, 0)
-            # weights_v2t = torch.nan_to_num_(
-            #     weights_v2t, nan=1e-2, posinf=1e-2, neginf=1e-2
-            # )
-            # weights_t2v = torch.nan_to_num_(
-            #     weights_t2v, nan=1e-2, posinf=1e-2, neginf=1e-2
-            # )
-
-        # select a negative image for each text
-        # if self.vtm_hard_neg:
-        #     vision_neg_indices = torch.multinomial(
-        #         weights_t2v, 1
-        #     ).squeeze()  # NOTE bs != 1
-        #     txt_neg_indices = torch.multinomial(weights_v2t, 1).squeeze()
-        # else:
-        #     vision_neg_indices = self.get_rand_indices(mask, 1).squeeze()
-        #     txt_neg_indices = self.get_rand_indices(mask, 1).squeeze()
-
-        # vision_embeds_neg = vision_embeds[vision_neg_indices]  # [B, T*L, c]
-        # text_embeds_neg = text_embeds[txt_neg_indices]  # [B, L, d]
-        # text_atts_neg = text_atts[txt_neg_indices]
-
-        # concat embeddings
-        # vision_embeds_all = torch.cat(
-        #     [vision_embeds, vision_embeds_neg, vision_embeds], dim=0
-        # )
-        # text_embeds_all = torch.cat([text_embeds, text_embeds, text_embeds_neg], dim=0)
-        # vision_atts_all = torch.cat([vision_atts, vision_atts, vision_atts], dim=0)
-        # text_atts_all = torch.cat([text_atts, text_atts, text_atts_neg], dim=0)
-
-        # output = multimodal_encoder(
-        #     encoder_embeds=text_embeds_all,
-        #     attention_mask=text_atts_all,
-        #     encoder_hidden_states=vision_embeds_all,
-        #     encoder_attention_mask=vision_atts_all,
-        #     return_dict=True,
-        #     mode="fusion",
-        # )
 
         output = multimodal_encoder(
             encoder_embeds=text_embeds,
@@ -322,37 +237,9 @@ class VTC_VTM_Loss(nn.Module):
             use_pot_tokens=use_pot_tokens,
         )
 
-        vtm_embeds = output.last_hidden_state[
-            :, 0
-        ]  # pos (N, d)  # pos (N, d) + neg (2N, d)
-
-        vtm_logits = vtm_head(vtm_embeds)  # [B, 2] # [3*B, 2]
-
-        # bs = vtm_logits.shape[0] // 3
-        bs = vtm_logits.shape[0]
-
-        vtm_normalized = torch.mean(F.softmax(vtm_logits, dim=1)[:, 1])
-        return vtm_normalized
-        # vtm_labels = vtm_logits.new_ones(3 * bs, dtype=torch.long)
-        # vtm_labels[bs:] = 0
-        # loss_vtm = F.cross_entropy(vtm_logits, vtm_labels)
-        # return loss_vtm
-
-    def get_rand_indices(self, mask, k):
-        """get rand indices according to mask.
-        Args:
-            mask (torch.Tensor): Shape: (N, L) 0 indicates the positions that we can sample, 1 otherwise
-            k (int): the number indices to sample at each row.
-        Returns:
-            The sampled indices. Shape: [N,k].
-            (N, k) indices
-        """
-        mask = mask.float()
-        mask = mask - 10000 * mask
-        mask += torch.randn_like(mask)
-        _, indices = torch.sort(mask, dim=1, descending=True)
-        indices = indices[:, :k].contiguous()
-        return indices
+        vtm_embeds = output.last_hidden_state[:, 0]
+        vtm_logits = vtm_head(vtm_embeds)
+        return F.softmax(vtm_logits, dim=1)[:, 1].mean()
 
     @torch.no_grad()
     def get_mask(self, sim, idx=None, normalize=False):
