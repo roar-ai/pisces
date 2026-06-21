@@ -1,11 +1,9 @@
 <div align="center">
-<img src="assets/logo.jpg" width="30%"/>
+<img src="assets/logo.jpg" width="100%"/>
 
-# PISCES
+# PISCES: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards
 
-### Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards
-
-[Paper](https://arxiv.org/abs/2602.01624) · ICML 2026
+[Paper](https://arxiv.org/abs/2602.01624) · **ICML 2026**
 </div>
 
 PISCES is an annotation-free post-training method for text-to-video diffusion
