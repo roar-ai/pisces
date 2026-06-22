@@ -57,3 +57,10 @@ flash-attention/
 logs/
 pretrained/*
 !pretrained/OT_map_156000.pt
+
+# Keep generated/downloaded data ignored except the released MovieGenBench
+# validation prompt embeddings used by the canonical PISCES script.
+!data/
+data/*
+!data/Hunyuan-MovieGenBench/
+!data/Hunyuan-MovieGenBench/**
