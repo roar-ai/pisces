@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <meta name="title" content="PISCES: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards">
+  <meta name="description" content="PISCES is an annotation-free text-to-video post-training method with dual optimal-transport-aligned quality and semantic rewards.">
+  <meta name="keywords" content="text-to-video, video generation, optimal transport, reward modeling, post-training, InternVideo2, HunyuanVideo, ICML 2026">
+  <meta name="author" content="Minh-Quan Le, Gaurav Mittal, Cheng Zhao, David Gu, Dimitris Samaras, Mei Chen">
+  <meta name="robots" content="index, follow">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="PISCES Project Page">
+  <meta property="og:title" content="PISCES: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards">
+  <meta property="og:description" content="Dual optimal-transport-aligned rewards for scalable, annotation-free text-to-video post-training.">
+  <meta property="og:url" content="https://roar-ai.github.io/pisces/">
+  <meta property="og:image" content="https://roar-ai.github.io/pisces/static/images/social_preview.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="PISCES text-to-video post-training teaser">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="PISCES: Annotation-free Text-to-Video Post-Training">
+  <meta name="twitter:description" content="Dual optimal-transport-aligned quality and semantic rewards for text-to-video generation.">
+  <meta name="twitter:image" content="https://roar-ai.github.io/pisces/static/images/social_preview.jpg">
+
+  <meta name="citation_title" content="PISCES: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards">
+  <meta name="citation_author" content="Le, Minh-Quan">
+  <meta name="citation_author" content="Mittal, Gaurav">
+  <meta name="citation_author" content="Zhao, Cheng">
+  <meta name="citation_author" content="Gu, David">
+  <meta name="citation_author" content="Samaras, Dimitris">
+  <meta name="citation_author" content="Chen, Mei">
+  <meta name="citation_publication_date" content="2026">
+  <meta name="citation_conference_title" content="Forty-third International Conference on Machine Learning">
+  <meta name="citation_pdf_url" content="https://arxiv.org/pdf/2602.01624">
+
+  <meta name="theme-color" content="#0f766e">
+  <title>PISCES | ICML 2026</title>
+
+  <link rel="icon" type="image/png" href="static/images/favicon.png">
+  <link rel="apple-touch-icon" href="static/images/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="static/css/bulma.min.css">
+  <link rel="stylesheet" href="static/css/bulma-carousel.min.css">
+  <link rel="stylesheet" href="static/css/fontawesome.all.min.css">
+  <link rel="stylesheet" href="static/css/index.css">
+
+  <script defer src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script defer src="static/js/fontawesome.all.min.js"></script>
+  <script defer src="static/js/bulma-carousel.min.js"></script>
+  <script defer src="static/js/index.js"></script>
+  <script>
+    window.MathJax = {
+      tex: {inlineMath: [['$', '$'], ['\\(', '\\)']]},
+      svg: {fontCache: 'global'}
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "ScholarlyArticle",
+    "headline": "PISCES: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards",
+    "description": "An annotation-free text-to-video post-training algorithm with dual optimal-transport-aligned rewards.",
+    "author": [
+      {"@type": "Person", "name": "Minh-Quan Le"},
+      {"@type": "Person", "name": "Gaurav Mittal"},
+      {"@type": "Person", "name": "Cheng Zhao"},
+      {"@type": "Person", "name": "David Gu"},
+      {"@type": "Person", "name": "Dimitris Samaras"},
+      {"@type": "Person", "name": "Mei Chen"}
+    ],
+    "datePublished": "2026",
+    "publisher": {"@type": "Organization", "name": "ICML"},
+    "url": "https://roar-ai.github.io/pisces/",
+    "image": "https://roar-ai.github.io/pisces/static/images/social_preview.jpg",
+    "keywords": ["text-to-video", "optimal transport", "reward modeling", "post-training"],
+    "isAccessibleForFree": true
+  }
+  </script>
+</head>
+
+<body>
+  <button class="scroll-to-top" onclick="scrollToTop()" title="Scroll to top" aria-label="Scroll to top">
+    <i class="fas fa-chevron-up"></i>
+  </button>
+
+  <div class="more-works-container">
+    <button class="more-works-btn" onclick="toggleMoreWorks()" title="View more related work">
+      <i class="fas fa-flask"></i>
+      More Works
+      <i class="fas fa-chevron-down dropdown-arrow"></i>
+    </button>
+    <div class="more-works-dropdown" id="moreWorksDropdown">
+      <div class="dropdown-header">
+        <h4>More Works from Our Team</h4>
+        <button class="close-btn" onclick="toggleMoreWorks()" aria-label="Close related works">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="works-list">
+        <a href="https://cvlab-stonybrook.github.io/NewtonRewards/" class="work-item" target="_blank" rel="noopener">
+          <div class="work-info">
+            <h5>NewtonRewards</h5>
+            <p>Post-training Newton's laws with verifiable rewards.</p>
+            <span class="work-venue">2025</span>
+          </div>
+          <i class="fas fa-external-link-alt"></i>
+        </a>
+        <a href="https://roar-ai.github.io/hummingbird/" class="work-item" target="_blank" rel="noopener">
+          <div class="work-info">
+            <h5>Hummingbird</h5>
+            <p>High-fidelity image generation via multimodal context alignment.</p>
+            <span class="work-venue">ICLR 2025</span>
+          </div>
+          <i class="fas fa-external-link-alt"></i>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <main id="main-content">
+    <section class="hero publication-header">
+      <div class="hero-body">
+        <div class="container is-max-desktop">
+          <div class="columns is-centered">
+            <div class="column has-text-centered">
+              <div class="venue-pill">ICML 2026</div>
+              <h1 class="title is-1 publication-title">
+                <span class="pisces-wordmark">PISCES</span>: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards
+              </h1>
+
+              <div class="is-size-5 publication-authors">
+                <span class="author-block"><a href="https://minhquanlecs.github.io/" target="_blank" rel="noopener">Minh-Quan Le</a><sup>*1,2</sup>,</span>
+                <span class="author-block"><a href="https://scholar.google.com/citations?user=m-tCelQAAAAJ&amp;hl=en" target="_blank" rel="noopener">Gaurav Mittal</a><sup>*1</sup>,</span>
+                <span class="author-block">Cheng Zhao<sup>1</sup>,</span>
+                <span class="author-block">David Gu<sup>2</sup>,</span>
+                <span class="author-block"><a href="https://www3.cs.stonybrook.edu/~samaras/" target="_blank" rel="noopener">Dimitris Samaras</a><sup>2</sup>,</span>
+                <span class="author-block">Mei Chen<sup>1</sup></span>
+              </div>
+
+              <div class="is-size-5 publication-authors affiliation-block">
+                <span><sup>1</sup>Microsoft</span>
+                <span><sup>2</sup>Stony Brook University</span>
+                <span class="eql-cntrb"><sup>*</sup>Equal contribution</span>
+              </div>
+
+              <div class="publication-links">
+                <span class="link-block">
+                  <a href="https://openreview.net/forum?id=wSfc8mDEjM" target="_blank" rel="noopener" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon"><i class="fas fa-file-alt"></i></span>
+                    <span>Paper</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="https://arxiv.org/abs/2602.01624" target="_blank" rel="noopener" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon"><i class="fas fa-file-pdf"></i></span>
+                    <span>arXiv</span>
+                  </a>
+                </span>
+                <span class="link-block">
+                  <a href="https://github.com/roar-ai/pisces" target="_blank" rel="noopener" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon"><i class="fab fa-github"></i></span>
+                    <span>Code</span>
+                  </a>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero teaser-video-section">
+      <div class="container is-max-desktop">
+        <div class="hero-body">
+          <video class="hero-video" autoplay controls muted loop playsinline preload="metadata" poster="static/images/social_preview.jpg">
+            <source src="static/videos/teaser.mp4" type="video/mp4">
+          </video>
+        </div>
+      </div>
+    </section>
+
+    <section class="section teaser-image-section">
+      <div class="container is-max-desktop">
+        <figure class="publication-banner">
+          <img src="static/images/teaser.jpg" alt="PISCES qualitative teaser comparing baseline and OT-aligned post-training" loading="eager">
+        </figure>
+        <p class="figure-caption">
+          <span class="pisces-wordmark">PISCES</span> aligns annotation-free reward supervision with the real-video distribution at both global and token levels, improving visual quality, temporal coherence, and prompt fidelity.
+        </p>
+      </div>
+    </section>
+
+    <section class="section hero is-light">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+            <h2 class="title is-3">Abstract</h2>
+            <div class="content has-text-justified">
+              <p>
+                Text-to-video (T2V) generation aims to synthesize videos with high visual quality and temporal consistency that are semantically aligned with input text. Reward-based post-training has emerged as a promising direction to improve the quality and semantic alignment of generated videos. However, recent methods either rely on large-scale human preference annotations or operate on misaligned embeddings from pre-trained vision-language models, leading to limited scalability or suboptimal supervision.
+              </p>
+              <p>
+                We present <span class="pisces-wordmark">PISCES</span>, an annotation-free post-training algorithm that addresses these limitations via a novel Dual Optimal Transport (OT)-aligned Rewards module. To align reward signals with human judgment, <span class="pisces-wordmark">PISCES</span> uses OT to bridge text and video embeddings at both distributional and discrete token levels, enabling reward supervision to fulfill two objectives: (i) a Distributional OT-aligned Quality Reward that captures overall visual quality and temporal coherence; and (ii) a Discrete Token-level OT-aligned Semantic Reward that enforces semantic, spatio-temporal correspondence between text and video tokens.
+              </p>
+              <p>
+                To our knowledge, <span class="pisces-wordmark">PISCES</span> is the first to improve annotation-free reward supervision in generative post-training through the lens of OT. Experiments on both short- and long-video generation show that <span class="pisces-wordmark">PISCES</span> outperforms both annotation-based and annotation-free methods on VBench across Quality and Semantic scores, with human preference studies further validating its effectiveness. We show that the Dual OT-aligned Rewards module is compatible with multiple optimization paradigms, including direct backpropagation and reinforcement learning fine-tuning.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section method-section">
+      <div class="container is-max-desktop">
+        <h2 class="title is-3 has-text-centered">Method</h2>
+        <figure class="publication-banner">
+          <img src="static/images/method.jpg" alt="PISCES dual optimal transport aligned rewards framework" loading="lazy">
+        </figure>
+        <div class="content has-text-justified method-description">
+          <p>
+            <strong><span class="pisces-wordmark">PISCES</span> T2V Post-Training.</strong>
+            We introduce a Dual OT-aligned Rewards module: (i) a distributional OT map $\mathbf{T}^{\star}$ for Quality Reward via <code>[CLS]</code> representation similarity, and (ii) a discrete OT plan $\mathbf{P}^{\star}$ with spatio-temporal constraints for Semantic Reward via a Video-Text Matching (VTM) classifier. The rewards module provides supervision for fine-tuning the T2V denoiser and is applicable with direct backpropagation and RL fine-tuning (GRPO).
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section hero is-light qualitative-intro">
+      <div class="container is-max-desktop has-text-centered">
+        <h2 class="title is-3">Qualitative Results</h2>
+        <p class="subtitle">
+          HunyuanVideo generations at 720p. Each carousel uses the same six MovieGenBench prompts for direct comparison.
+        </p>
+        <div class="method-legend">
+          <span class="legend-chip"><strong>Pre-trained:</strong> HunyuanVideo</span>
+          <span class="legend-chip is-pisces"><strong>PISCES:</strong> OT + quality + semantic + LoRA</span>
+          <span class="legend-chip"><strong>No OT:</strong> quality + semantic + LoRA</span>
+          <span class="legend-chip"><strong>T2V-Turbo:</strong> quality + LoRA</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero is-small results-section">
+      <div class="hero-body">
+        <div class="container">
+          <h2 class="title is-3 has-text-centered">Pre-trained HunyuanVideo</h2>
+          <p class="method-summary has-text-centered">The original generator before reward-based post-training.</p>
+          <div class="carousel results-carousel">
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pretrained_0.jpg"><source src="static/videos/results/pretrained_0.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 0.</strong> A close up view of a glass sphere that has a zen garden within it. There is a small dwarf in the sphere who is raking the zen garden and creating patterns in the sand.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pretrained_1.jpg"><source src="static/videos/results/pretrained_1.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 1.</strong> A flock of paper airplanes flutters through a dense jungle, weaving around trees as if they were migrating birds.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pretrained_2.jpg"><source src="static/videos/results/pretrained_2.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 2.</strong> A stylish woman walks down a Tokyo street filled with warm glowing neon and animated city signage. She wears a black leather jacket, a long red dress, and black boots, and carries a black purse. She wears sunglasses and red lipstick. She walks confidently and casually. The street is damp and reflective, creating a mirror effect of the colorful lights. Many pedestrians walk about.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pretrained_3.jpg"><source src="static/videos/results/pretrained_3.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 3.</strong> A superintelligent humanoid robot waking up. The robot has a sleek metallic body with futuristic design features. Its glowing red eyes are the focal point, emanating a sharp, intense light as it powers on. The scene is set in a dimly lit, high-tech laboratory filled with glowing control panels, robotic arms, and holographic screens. The setting emphasizes advanced technology and an atmosphere of mystery. The ambiance is eerie and dramatic, highlighting the moment of awakening and the robot's immense intelligence. Photorealistic style with a cinematic, dark sci-fi aesthetic. Aspect ratio: 16:9 --v 6.1</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pretrained_4.jpg"><source src="static/videos/results/pretrained_4.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 4.</strong> An extreme close-up of an gray-haired man with a beard in his 60s, he is deep in thought pondering the history of the universe as he sits at a cafe in Paris, his eyes focus on people offscreen as they walk as he sits mostly motionless, he is dressed in a wool coat suit coat with a button-down shirt, he wears a brown beret and glasses and has a very professorial appearance, and the end he offers a subtle closed-mouth smile as if he found the answer to the mystery of life, the lighting is very cinematic with the golden light and the Parisian streets and city in the background, depth of field, cinematic 35mm film.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pretrained_8.jpg"><source src="static/videos/results/pretrained_8.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 8.</strong> New York City submerged like Atlantis. Fish, whales, sea turtles and sharks swim through the streets of New York.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero is-small is-light results-section">
+      <div class="hero-body">
+        <div class="container">
+          <h2 class="title is-3 has-text-centered"><span class="pisces-wordmark">PISCES</span></h2>
+          <p class="method-summary has-text-centered">Dual OT alignment + quality reward + semantic reward + LoRA, after 256 post-training steps.</p>
+          <div class="carousel results-carousel">
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_0.jpg"><source src="static/videos/results/pisces_0.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 0.</strong> A close up view of a glass sphere that has a zen garden within it. There is a small dwarf in the sphere who is raking the zen garden and creating patterns in the sand.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_1.jpg"><source src="static/videos/results/pisces_1.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 1.</strong> A flock of paper airplanes flutters through a dense jungle, weaving around trees as if they were migrating birds.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_2.jpg"><source src="static/videos/results/pisces_2.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 2.</strong> A stylish woman walks down a Tokyo street filled with warm glowing neon and animated city signage. She wears a black leather jacket, a long red dress, and black boots, and carries a black purse. She wears sunglasses and red lipstick. She walks confidently and casually. The street is damp and reflective, creating a mirror effect of the colorful lights. Many pedestrians walk about.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_3.jpg"><source src="static/videos/results/pisces_3.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 3.</strong> A superintelligent humanoid robot waking up. The robot has a sleek metallic body with futuristic design features. Its glowing red eyes are the focal point, emanating a sharp, intense light as it powers on. The scene is set in a dimly lit, high-tech laboratory filled with glowing control panels, robotic arms, and holographic screens. The setting emphasizes advanced technology and an atmosphere of mystery. The ambiance is eerie and dramatic, highlighting the moment of awakening and the robot's immense intelligence. Photorealistic style with a cinematic, dark sci-fi aesthetic. Aspect ratio: 16:9 --v 6.1</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_4.jpg"><source src="static/videos/results/pisces_4.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 4.</strong> An extreme close-up of an gray-haired man with a beard in his 60s, he is deep in thought pondering the history of the universe as he sits at a cafe in Paris, his eyes focus on people offscreen as they walk as he sits mostly motionless, he is dressed in a wool coat suit coat with a button-down shirt, he wears a brown beret and glasses and has a very professorial appearance, and the end he offers a subtle closed-mouth smile as if he found the answer to the mystery of life, the lighting is very cinematic with the golden light and the Parisian streets and city in the background, depth of field, cinematic 35mm film.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_8.jpg"><source src="static/videos/results/pisces_8.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 8.</strong> New York City submerged like Atlantis. Fish, whales, sea turtles and sharks swim through the streets of New York.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero is-small results-section">
+      <div class="hero-body">
+        <div class="container">
+          <h2 class="title is-3 has-text-centered">PISCES without OT</h2>
+          <p class="method-summary has-text-centered">Quality reward + semantic reward + LoRA, without distributional or token-level OT alignment.</p>
+          <div class="carousel results-carousel">
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/no_ot_0.jpg"><source src="static/videos/results/no_ot_0.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 0.</strong> A close up view of a glass sphere that has a zen garden within it. There is a small dwarf in the sphere who is raking the zen garden and creating patterns in the sand.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/no_ot_1.jpg"><source src="static/videos/results/no_ot_1.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 1.</strong> A flock of paper airplanes flutters through a dense jungle, weaving around trees as if they were migrating birds.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/no_ot_2.jpg"><source src="static/videos/results/no_ot_2.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 2.</strong> A stylish woman walks down a Tokyo street filled with warm glowing neon and animated city signage. She wears a black leather jacket, a long red dress, and black boots, and carries a black purse. She wears sunglasses and red lipstick. She walks confidently and casually. The street is damp and reflective, creating a mirror effect of the colorful lights. Many pedestrians walk about.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/no_ot_3.jpg"><source src="static/videos/results/no_ot_3.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 3.</strong> A superintelligent humanoid robot waking up. The robot has a sleek metallic body with futuristic design features. Its glowing red eyes are the focal point, emanating a sharp, intense light as it powers on. The scene is set in a dimly lit, high-tech laboratory filled with glowing control panels, robotic arms, and holographic screens. The setting emphasizes advanced technology and an atmosphere of mystery. The ambiance is eerie and dramatic, highlighting the moment of awakening and the robot's immense intelligence. Photorealistic style with a cinematic, dark sci-fi aesthetic. Aspect ratio: 16:9 --v 6.1</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/no_ot_4.jpg"><source src="static/videos/results/no_ot_4.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 4.</strong> An extreme close-up of an gray-haired man with a beard in his 60s, he is deep in thought pondering the history of the universe as he sits at a cafe in Paris, his eyes focus on people offscreen as they walk as he sits mostly motionless, he is dressed in a wool coat suit coat with a button-down shirt, he wears a brown beret and glasses and has a very professorial appearance, and the end he offers a subtle closed-mouth smile as if he found the answer to the mystery of life, the lighting is very cinematic with the golden light and the Parisian streets and city in the background, depth of field, cinematic 35mm film.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/no_ot_8.jpg"><source src="static/videos/results/no_ot_8.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 8.</strong> New York City submerged like Atlantis. Fish, whales, sea turtles and sharks swim through the streets of New York.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero is-small is-light results-section">
+      <div class="hero-body">
+        <div class="container">
+          <h2 class="title is-3 has-text-centered">T2V-Turbo</h2>
+          <p class="method-summary has-text-centered">Quality reward + LoRA, without OT alignment or the fine-grained semantic reward.</p>
+          <div class="carousel results-carousel">
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/t2v_turbo_0.jpg"><source src="static/videos/results/t2v_turbo_0.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 0.</strong> A close up view of a glass sphere that has a zen garden within it. There is a small dwarf in the sphere who is raking the zen garden and creating patterns in the sand.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/t2v_turbo_1.jpg"><source src="static/videos/results/t2v_turbo_1.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 1.</strong> A flock of paper airplanes flutters through a dense jungle, weaving around trees as if they were migrating birds.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/t2v_turbo_2.jpg"><source src="static/videos/results/t2v_turbo_2.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 2.</strong> A stylish woman walks down a Tokyo street filled with warm glowing neon and animated city signage. She wears a black leather jacket, a long red dress, and black boots, and carries a black purse. She wears sunglasses and red lipstick. She walks confidently and casually. The street is damp and reflective, creating a mirror effect of the colorful lights. Many pedestrians walk about.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/t2v_turbo_3.jpg"><source src="static/videos/results/t2v_turbo_3.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 3.</strong> A superintelligent humanoid robot waking up. The robot has a sleek metallic body with futuristic design features. Its glowing red eyes are the focal point, emanating a sharp, intense light as it powers on. The scene is set in a dimly lit, high-tech laboratory filled with glowing control panels, robotic arms, and holographic screens. The setting emphasizes advanced technology and an atmosphere of mystery. The ambiance is eerie and dramatic, highlighting the moment of awakening and the robot's immense intelligence. Photorealistic style with a cinematic, dark sci-fi aesthetic. Aspect ratio: 16:9 --v 6.1</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/t2v_turbo_4.jpg"><source src="static/videos/results/t2v_turbo_4.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 4.</strong> An extreme close-up of an gray-haired man with a beard in his 60s, he is deep in thought pondering the history of the universe as he sits at a cafe in Paris, his eyes focus on people offscreen as they walk as he sits mostly motionless, he is dressed in a wool coat suit coat with a button-down shirt, he wears a brown beret and glasses and has a very professorial appearance, and the end he offers a subtle closed-mouth smile as if he found the answer to the mystery of life, the lighting is very cinematic with the golden light and the Parisian streets and city in the background, depth of field, cinematic 35mm film.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/t2v_turbo_8.jpg"><source src="static/videos/results/t2v_turbo_8.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 8.</strong> New York City submerged like Atlantis. Fish, whales, sea turtles and sharks swim through the streets of New York.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="BibTeX">
+      <div class="container is-max-desktop content">
+        <div class="bibtex-header">
+          <h2 class="title">BibTeX</h2>
+          <button class="copy-bibtex-btn" onclick="copyBibTeX()" title="Copy BibTeX to clipboard">
+            <i class="fas fa-copy"></i>
+            <span class="copy-text">Copy</span>
+          </button>
+        </div>
+        <pre id="bibtex-code"><code>@inproceedings{le2026pisces,
+  title     = {PISCES: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards},
+  author    = {Le, Minh-Quan and Mittal, Gaurav and Zhao, Cheng and Gu, David and Samaras, Dimitris and Chen, Mei},
+  booktitle = {Forty-third International Conference on Machine Learning},
+  year      = {2026},
+  url       = {https://openreview.net/forum?id=wSfc8mDEjM}
+}</code></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <div class="columns is-centered">
+        <div class="column is-8">
+          <div class="content">
+            <p>
+              This page was built using the
+              <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank" rel="noopener">Academic Project Page Template</a>,
+              adopted from the <a href="https://nerfies.github.io" target="_blank" rel="noopener">Nerfies</a> project page.
+              The page is licensed under
+              <a rel="license" href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank">CC BY-SA 4.0</a>.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
