@@ -335,9 +335,13 @@ body {
   padding-bottom: 2rem;
 }
 
-.hero-video {
+.teaser-main-video {
   display: block;
   width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  position: static;
+  object-fit: contain;
   border-radius: var(--border-radius-lg);
   box-shadow: var(--shadow-xl);
   background: #020617;
@@ -915,4 +919,3 @@ a:focus {
     box-shadow: none !important;
   }
 }
-

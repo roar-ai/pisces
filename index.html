@@ -39,8 +39,8 @@
   <meta name="theme-color" content="#0f766e">
   <title>PISCES | ICML 2026</title>
 
-  <link rel="icon" type="image/png" href="static/images/favicon.png">
-  <link rel="apple-touch-icon" href="static/images/favicon.png">
+  <link rel="icon" type="image/x-icon" href="static/images/favicon.ico">
+  <link rel="shortcut icon" type="image/x-icon" href="static/images/favicon.ico">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -71,10 +71,10 @@
     "author": [
       {"@type": "Person", "name": "Minh-Quan Le"},
       {"@type": "Person", "name": "Gaurav Mittal"},
-      {"@type": "Person", "name": "Cheng Zhao"},
-      {"@type": "Person", "name": "David Gu"},
-      {"@type": "Person", "name": "Dimitris Samaras"},
-      {"@type": "Person", "name": "Mei Chen"}
+      {"@type": "Person", "name": "Cheng Zhao", "sameAs": "https://scholar.google.com/citations?user=EAC-8m0AAAAJ&hl=en"},
+      {"@type": "Person", "name": "David Gu", "sameAs": "https://scholar.google.com/citations?user=Y063_CIAAAAJ&hl=en"},
+      {"@type": "Person", "name": "Dimitris Samaras", "sameAs": "https://scholar.google.com/citations?hl=en&user=BxbKTYkAAAAJ"},
+      {"@type": "Person", "name": "Mei Chen", "sameAs": "https://scholar.google.com/citations?user=DjfReA4AAAAJ&hl=en"}
     ],
     "datePublished": "2026",
     "publisher": {"@type": "Organization", "name": "ICML"},
@@ -139,10 +139,10 @@
               <div class="is-size-5 publication-authors">
                 <span class="author-block"><a href="https://minhquanlecs.github.io/" target="_blank" rel="noopener">Minh-Quan Le</a><sup>*1,2</sup>,</span>
                 <span class="author-block"><a href="https://scholar.google.com/citations?user=m-tCelQAAAAJ&amp;hl=en" target="_blank" rel="noopener">Gaurav Mittal</a><sup>*1</sup>,</span>
-                <span class="author-block">Cheng Zhao<sup>1</sup>,</span>
-                <span class="author-block">David Gu<sup>2</sup>,</span>
-                <span class="author-block"><a href="https://www3.cs.stonybrook.edu/~samaras/" target="_blank" rel="noopener">Dimitris Samaras</a><sup>2</sup>,</span>
-                <span class="author-block">Mei Chen<sup>1</sup></span>
+                <span class="author-block"><a href="https://scholar.google.com/citations?user=EAC-8m0AAAAJ&amp;hl=en" target="_blank" rel="noopener">Cheng Zhao</a><sup>1</sup>,</span>
+                <span class="author-block"><a href="https://scholar.google.com/citations?user=Y063_CIAAAAJ&amp;hl=en" target="_blank" rel="noopener">David Gu</a><sup>2</sup>,</span>
+                <span class="author-block"><a href="https://scholar.google.com/citations?hl=en&amp;user=BxbKTYkAAAAJ" target="_blank" rel="noopener">Dimitris Samaras</a><sup>2</sup>,</span>
+                <span class="author-block"><a href="https://scholar.google.com/citations?user=DjfReA4AAAAJ&amp;hl=en" target="_blank" rel="noopener">Mei Chen</a><sup>1</sup></span>
               </div>
 
               <div class="is-size-5 publication-authors affiliation-block">
@@ -178,9 +178,9 @@
     </section>
 
     <section class="hero teaser-video-section">
-      <div class="container is-max-desktop">
+      <div class="container is-widescreen">
         <div class="hero-body">
-          <video class="hero-video" autoplay controls muted loop playsinline preload="metadata" poster="static/images/social_preview.jpg">
+          <video class="teaser-main-video" autoplay controls muted loop playsinline preload="metadata" poster="static/images/social_preview.jpg">
             <source src="static/videos/teaser.mp4" type="video/mp4">
           </video>
         </div>
@@ -288,7 +288,7 @@
       <div class="hero-body">
         <div class="container">
           <h2 class="title is-3 has-text-centered"><span class="pisces-wordmark">PISCES</span></h2>
-          <p class="method-summary has-text-centered">Dual OT alignment + quality reward + semantic reward + LoRA, after 256 post-training steps.</p>
+          <p class="method-summary has-text-centered">Dual OT alignment + quality reward + semantic reward + LoRA, after 192 post-training steps.</p>
           <div class="carousel results-carousel">
             <div class="item">
               <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_0.jpg"><source src="static/videos/results/pisces_0.mp4" type="video/mp4"></video>
@@ -323,7 +323,7 @@
       <div class="hero-body">
         <div class="container">
           <h2 class="title is-3 has-text-centered">PISCES without OT</h2>
-          <p class="method-summary has-text-centered">Quality reward + semantic reward + LoRA, without distributional or token-level OT alignment.</p>
+          <p class="method-summary has-text-centered">Quality reward + semantic reward + LoRA after 192 post-training steps, without distributional or token-level OT alignment.</p>
           <div class="carousel results-carousel">
             <div class="item">
               <video controls muted loop playsinline preload="metadata" poster="static/images/results/no_ot_0.jpg"><source src="static/videos/results/no_ot_0.mp4" type="video/mp4"></video>
@@ -358,7 +358,7 @@
       <div class="hero-body">
         <div class="container">
           <h2 class="title is-3 has-text-centered">T2V-Turbo</h2>
-          <p class="method-summary has-text-centered">Quality reward + LoRA, without OT alignment or the fine-grained semantic reward.</p>
+          <p class="method-summary has-text-centered">Quality reward + LoRA after 192 post-training steps, without OT alignment or the fine-grained semantic reward.</p>
           <div class="carousel results-carousel">
             <div class="item">
               <video controls muted loop playsinline preload="metadata" poster="static/images/results/t2v_turbo_0.jpg"><source src="static/videos/results/t2v_turbo_0.mp4" type="video/mp4"></video>
