@@ -189,7 +189,7 @@ produced by your WebVid10M download.
 
 ```bash
 torchrun --standalone --nproc_per_node=1 train_OT_map.py \
-  --train-urls "data/webvid_10m_train/{00001..00036}.tar" \
+  --train-urls "data/webvid_10m_train/{00001..0[XXXX]}.tar" \
   --val-urls "data/webvid_10m_train/00000.tar" \
   --iv2-ckpt pretrained/InternVideo2-stage2_1b-224p-f4.pt \
   --output-dir data/outputs/ot_map \
@@ -201,7 +201,7 @@ reduce it if you want to preserve the paper's global batch size:
 
 ```bash
 torchrun --standalone --nproc_per_node=8 train_OT_map.py \
-  --train-urls "data/webvid_10m_train/{00001..00036}.tar" \
+  --train-urls "data/webvid_10m_train/{00001..0[XXXX]}.tar" \
   --val-urls "data/webvid_10m_train/val_split/val_part_{0..7}.tar" \
   --batch-size 16 \
   --val-batch-size 16 \
@@ -231,8 +231,8 @@ Either a raw OT map or a structured checkpoint can be passed to
 
 ```bash
 torchrun --standalone --nproc_per_node=1 train_OT_map.py \
-  --resume-from data/outputs/ot_map/checkpoints/last.pt \
-  --train-urls "data/webvid_10m_train/{00001..00036}.tar" \
+  --resume-from data/outputs/ot_map/checkpoints/ot_map_best_struct.pt \
+  --train-urls "data/webvid_10m_train/{00001..0[XXXX]}.tar" \
   --val-urls "data/webvid_10m_train/00000.tar"
 ```
 
@@ -402,8 +402,9 @@ bash -n scripts/distill/distill_hunyuan.sh
 @inproceedings{le2026pisces,
   title     = {PISCES: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards},
   author    = {Le, Minh-Quan and Mittal, Gaurav and Zhao, Cheng and Gu, David and Samaras, Dimitris and Chen, Mei},
-  booktitle = {International Conference on Machine Learning},
-  year      = {2026}
+  booktitle = {Forty-third International Conference on Machine Learning},
+  year      = {2026},
+  url={https://openreview.net/forum?id=wSfc8mDEjM}
 }
 ```
 

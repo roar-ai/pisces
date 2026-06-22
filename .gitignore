@@ -13,7 +13,6 @@ wandb/
 *.jpg
 *.mp3
 *.safetensors
-*.mp4
 *.png
 *.gif
 *.pth

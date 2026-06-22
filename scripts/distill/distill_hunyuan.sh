@@ -14,7 +14,7 @@ VAE_TILING="${VAE_TILING:-1}"
 
 MODEL_DIR="${MODEL_DIR:-$DATA_DIR/hunyuan}"
 DATA_JSON_PATH="${DATA_JSON_PATH:-$DATA_DIR/HD-Mixkit-Finetune-Hunyuan/videos2caption.json}"
-VALIDATION_PROMPT_DIR="${VALIDATION_PROMPT_DIR:-$DATA_DIR/HD-Mixkit-Finetune-Hunyuan/validation}"
+VALIDATION_PROMPT_DIR="${VALIDATION_PROMPT_DIR:-$DATA_DIR/Hunyuan-MovieGenBench/validation}"
 REWARD_MODEL_CKPT_DIR="${REWARD_MODEL_CKPT_DIR:-$PRETRAINED_DIR/InternVideo2-stage2_1b-224p-f4.pt}"
 OT_MAP_CKPT_DIR="${OT_MAP_CKPT_DIR:-$PRETRAINED_DIR/OT_map_156000.pt}"
 OUTPUT_DIR="${OUTPUT_DIR:-$DATA_DIR/outputs/$RUN_NAME}"
@@ -42,14 +42,14 @@ torchrun --standalone --nnodes 1 --nproc_per_node "$NUM_GPUS" \
     --sp_size "$SP_SIZE" \
     --train_sp_batch_size 1 \
     --dataloader_num_workers 4 \
-    --gradient_accumulation_steps 32 \
+    --gradient_accumulation_steps 8 \
     --max_train_steps "$MAX_TRAIN_STEPS" \
-    --learning_rate 1e-6 \
+    --learning_rate 1e-5 \
     --mixed_precision bf16 \
     --master_weight_type bf16 \
     --checkpointing_steps 64 \
     --validation_steps 64 \
-    --validation_sampling_steps 50 \
+    --validation_sampling_steps 25 \
     --checkpoints_total_limit 4 \
     --allow_tf32 \
     --ema_start_step 0 \
