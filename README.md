@@ -4,7 +4,7 @@
 # PISCES: Annotation-free Text-to-Video Post-Training via Optimal Transport-Aligned Rewards
 
 [Paper](https://arxiv.org/abs/2602.01624) ·
-[Project video](assets/pisces_icml2026.mp4) · **ICML 2026**
+[Project Page](https://roar-ai.github.io/pisces/) · **ICML 2026**
 </div>
 
 PISCES is an annotation-free post-training method for text-to-video diffusion
