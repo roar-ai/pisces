@@ -64,3 +64,6 @@ pretrained/*
 data/*
 !data/Hunyuan-MovieGenBench/
 !data/Hunyuan-MovieGenBench/**
+
+# Released PISCES project demo.
+!assets/pisces_icml2026.mp4
