@@ -238,13 +238,14 @@
       <div class="container is-max-desktop has-text-centered">
         <h2 class="title is-3">Qualitative Results</h2>
         <p class="subtitle">
-          HunyuanVideo generations at 720p. Each carousel uses the same six MovieGenBench prompts for direct comparison.
+          HunyuanVideo generations at 720p. Each carousel uses the same six MovieGenBench prompts for direct comparison. Unless noted otherwise, videos use 50 sampling steps.
         </p>
         <div class="method-legend">
-          <span class="legend-chip"><strong>Pre-trained:</strong> HunyuanVideo</span>
-          <span class="legend-chip is-pisces"><strong>PISCES:</strong> OT + quality + semantic + LoRA</span>
-          <span class="legend-chip"><strong>No OT:</strong> quality + semantic + LoRA</span>
-          <span class="legend-chip"><strong>T2V-Turbo:</strong> quality + LoRA</span>
+          <span class="legend-chip"><strong>Pre-trained:</strong> HunyuanVideo · 50 sampling steps</span>
+          <span class="legend-chip is-pisces"><strong>PISCES:</strong> OT + quality + semantic + LoRA · 50 sampling steps</span>
+          <span class="legend-chip is-pisces"><strong>PISCES + CD:</strong> consistency distillation · 25 sampling steps</span>
+          <span class="legend-chip"><strong>No OT:</strong> quality + semantic + LoRA · 50 sampling steps</span>
+          <span class="legend-chip"><strong>T2V-Turbo:</strong> quality + LoRA · 50 sampling steps</span>
         </div>
       </div>
     </section>
@@ -253,7 +254,7 @@
       <div class="hero-body">
         <div class="container">
           <h2 class="title is-3 has-text-centered">Pre-trained HunyuanVideo</h2>
-          <p class="method-summary has-text-centered">The original generator before reward-based post-training.</p>
+          <p class="method-summary has-text-centered">The original generator before reward-based post-training, using 50 sampling steps.</p>
           <div class="carousel results-carousel">
             <div class="item">
               <video controls muted loop playsinline preload="metadata" poster="static/images/results/pretrained_0.jpg"><source src="static/videos/results/pretrained_0.mp4" type="video/mp4"></video>
@@ -288,7 +289,7 @@
       <div class="hero-body">
         <div class="container">
           <h2 class="title is-3 has-text-centered"><span class="pisces-wordmark">PISCES</span></h2>
-          <p class="method-summary has-text-centered">Dual OT alignment + quality reward + semantic reward + LoRA, after 192 post-training steps.</p>
+          <p class="method-summary has-text-centered">Dual OT alignment + quality reward + semantic reward + LoRA, after 192 post-training steps and using 50 sampling steps.</p>
           <div class="carousel results-carousel">
             <div class="item">
               <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_0.jpg"><source src="static/videos/results/pisces_0.mp4" type="video/mp4"></video>
@@ -322,8 +323,43 @@
     <section class="hero is-small results-section">
       <div class="hero-body">
         <div class="container">
+          <h2 class="title is-3 has-text-centered"><span class="pisces-wordmark">PISCES</span> with Consistency Distillation</h2>
+          <p class="method-summary has-text-centered">Dual OT alignment + quality reward + semantic reward + consistency distillation, after 192 post-training steps and using only 25 sampling steps.</p>
+          <div class="carousel results-carousel">
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_cd_0.jpg"><source src="static/videos/results/pisces_cd_0.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 0.</strong> A close up view of a glass sphere that has a zen garden within it. There is a small dwarf in the sphere who is raking the zen garden and creating patterns in the sand.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_cd_1.jpg"><source src="static/videos/results/pisces_cd_1.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 1.</strong> A flock of paper airplanes flutters through a dense jungle, weaving around trees as if they were migrating birds.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_cd_2.jpg"><source src="static/videos/results/pisces_cd_2.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 2.</strong> A stylish woman walks down a Tokyo street filled with warm glowing neon and animated city signage. She wears a black leather jacket, a long red dress, and black boots, and carries a black purse. She wears sunglasses and red lipstick. She walks confidently and casually. The street is damp and reflective, creating a mirror effect of the colorful lights. Many pedestrians walk about.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_cd_3.jpg"><source src="static/videos/results/pisces_cd_3.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 3.</strong> A superintelligent humanoid robot waking up. The robot has a sleek metallic body with futuristic design features. Its glowing red eyes are the focal point, emanating a sharp, intense light as it powers on. The scene is set in a dimly lit, high-tech laboratory filled with glowing control panels, robotic arms, and holographic screens. The setting emphasizes advanced technology and an atmosphere of mystery. The ambiance is eerie and dramatic, highlighting the moment of awakening and the robot's immense intelligence. Photorealistic style with a cinematic, dark sci-fi aesthetic. Aspect ratio: 16:9 --v 6.1</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_cd_4.jpg"><source src="static/videos/results/pisces_cd_4.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 4.</strong> An extreme close-up of an gray-haired man with a beard in his 60s, he is deep in thought pondering the history of the universe as he sits at a cafe in Paris, his eyes focus on people offscreen as they walk as he sits mostly motionless, he is dressed in a wool coat suit coat with a button-down shirt, he wears a brown beret and glasses and has a very professorial appearance, and the end he offers a subtle closed-mouth smile as if he found the answer to the mystery of life, the lighting is very cinematic with the golden light and the Parisian streets and city in the background, depth of field, cinematic 35mm film.</p>
+            </div>
+            <div class="item">
+              <video controls muted loop playsinline preload="metadata" poster="static/images/results/pisces_cd_8.jpg"><source src="static/videos/results/pisces_cd_8.mp4" type="video/mp4"></video>
+              <p class="prompt-caption"><strong>Prompt 8.</strong> New York City submerged like Atlantis. Fish, whales, sea turtles and sharks swim through the streets of New York.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero is-small is-light results-section">
+      <div class="hero-body">
+        <div class="container">
           <h2 class="title is-3 has-text-centered">PISCES without OT</h2>
-          <p class="method-summary has-text-centered">Quality reward + semantic reward + LoRA after 192 post-training steps, without distributional or token-level OT alignment.</p>
+          <p class="method-summary has-text-centered">Quality reward + semantic reward + LoRA after 192 post-training steps and using 50 sampling steps, without distributional or token-level OT alignment.</p>
           <div class="carousel results-carousel">
             <div class="item">
               <video controls muted loop playsinline preload="metadata" poster="static/images/results/no_ot_0.jpg"><source src="static/videos/results/no_ot_0.mp4" type="video/mp4"></video>
@@ -354,11 +390,11 @@
       </div>
     </section>
 
-    <section class="hero is-small is-light results-section">
+    <section class="hero is-small results-section">
       <div class="hero-body">
         <div class="container">
           <h2 class="title is-3 has-text-centered">T2V-Turbo</h2>
-          <p class="method-summary has-text-centered">Quality reward + LoRA after 192 post-training steps, without OT alignment or the fine-grained semantic reward.</p>
+          <p class="method-summary has-text-centered">Quality reward + LoRA after 192 post-training steps and using 50 sampling steps, without OT alignment or the fine-grained semantic reward.</p>
           <div class="carousel results-carousel">
             <div class="item">
               <video controls muted loop playsinline preload="metadata" poster="static/images/results/t2v_turbo_0.jpg"><source src="static/videos/results/t2v_turbo_0.mp4" type="video/mp4"></video>
